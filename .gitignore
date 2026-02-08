@@ -6,7 +6,7 @@ backend/node_modules/
 ml-backend/node_modules/
 vite-project/node_modules/
 
-# Environment variables (IMPORTANT - Contains sensitive data)
+# Environment variables
 .env
 .env.local
 .env.development
@@ -29,8 +29,6 @@ logs/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-lerna-debug.log*
-.pnpm-debug.log*
 
 # OS files
 .DS_Store
@@ -42,10 +40,6 @@ desktop.ini
 .idea/
 *.swp
 *.swo
-*~
-.project
-.classpath
-.settings/
 
 # Python
 __pycache__/
@@ -58,33 +52,40 @@ venv/
 ENV/
 ml-backend/__pycache__/
 ml-backend/venv/
-ml-backend/env/
-
-# Testing
-coverage/
-.nyc_output/
-*.lcov
-
-# Temporary files
-*.tmp
-*.temp
-.cache/
 
 # Package manager
 package-lock.json
 yarn.lock
-pnpm-lock.yaml
 
 # Backup files
 *.backup
 *.bak
-backend/seedAllData.js.backup
-backend/addSampleProducts.js.backup
 
-# MongoDB data (if running locally)
+# MongoDB data
 data/
 mongodb/
 
 # Misc
 .eslintcache
 .parcel-cache
+
+# EXCLUDE EVERYTHING EXCEPT MAIN FOLDERS
+/*
+!/backend/
+!/frontend/
+!/ml-backend/
+!/.gitignore
+!/README.md
+!/package.json
+
+# Exclude vite-project
+vite-project/
+
+# Exclude all documentation and batch files
+*.md
+!README.md
+*.bat
+*.txt
+test-rbac.html
+image.png
+
