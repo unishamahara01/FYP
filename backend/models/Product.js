@@ -1,0 +1,87 @@
+const mongoose = require('mongoose');
+
+const productSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  genericName: {
+    type: String,
+    trim: true
+  },
+  category: {
+    type: String,
+    required: true,
+    enum: ['Antibiotic', 'Painkiller', 'Vitamin', 'Diabetes', 'Heart', 'Respiratory', 'Digestive', 'Other']
+  },
+  manufacturer: {
+    type: String,
+    required: true
+  },
+  batchNumber: {
+    type: String,
+    required: true,
+    unique: true
+  },
+  quantity: {
+    type: Number,
+    required: true,
+    min: 0
+  },
+  price: {
+    type: Number,
+    required: true,
+    min: 0
+  },
+  expiryDate: {
+    type: Date,
+    required: true
+  },
+  manufactureDate: {
+    type: Date,
+    required: true
+  },
+  reorderLevel: {
+    type: Number,
+    default: 50
+  },
+  supplier: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Supplier'
+  },
+  status: {
+    type: String,
+    enum: ['In Stock', 'Low Stock', 'Out of Stock', 'Expiring Soon'],
+    default: 'In Stock'
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// Update status based on quantity and expiry
+productSchema.pre('save', function(next) {
+  const today = new Date();
+  const daysUntilExpiry = Math.floor((this.expiryDate - today) / (1000 * 60 * 60 * 24));
+  
+  if (this.quantity === 0) {
+    this.status = 'Out of Stock';
+  } else if (this.quantity <= this.reorderLevel) {
+    this.status = 'Low Stock';
+  } else if (daysUntilExpiry <= 90) {
+    this.status = 'Expiring Soon';
+  } else {
+    this.status = 'In Stock';
+  }
+  
+  this.updatedAt = Date.now();
+  next();
+});
+
+module.exports = mongoose.model('Product', productSchema);
