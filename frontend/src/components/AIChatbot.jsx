@@ -1,18 +1,29 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './AIChatbot.css';
+import { aiAPI } from '../services/api';
 
 export default function AIChatbot() {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState([
     {
       type: 'bot',
-      text: 'Hello! I\'m MediBot, your pharmacy assistant. I can help you with:\n\n• Check medicine stock\n• Check expiry dates\n• Get reorder suggestions\n• View low stock items\n• Search medicines\n\nHow can I help you today?',
+      text: 'Hello! I\'m MediBot, your AI pharmacy assistant powered by Google Gemini. I can help you with:\n\n• Medicine information & dosages\n• Side effects & interactions\n• Check inventory stock\n• Expiry dates & alerts\n• Reorder suggestions\n\nHow can I help you today?',
       timestamp: new Date()
     }
   ]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [aiAvailable, setAiAvailable] = useState(false);
   const messagesEndRef = useRef(null);
+
+  useEffect(() => {
+    checkAIAvailability();
+  }, []);
+
+  const checkAIAvailability = async () => {
+    const available = await aiAPI.checkHealth();
+    setAiAvailable(available);
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -34,107 +45,79 @@ export default function AIChatbot() {
     setInputText('');
     setIsTyping(true);
 
-    // Simulate AI processing
-    setTimeout(async () => {
+    try {
       const response = await processQuery(userMessage);
       addMessage('bot', response);
+    } catch (error) {
+      addMessage('bot', "Sorry, I encountered an error processing your request.");
+    } finally {
       setIsTyping(false);
-    }, 1000);
+    }
   };
 
   const processQuery = async (query) => {
     const lowerQuery = query.toLowerCase();
+    const token = localStorage.getItem('authToken');
 
-    try {
-      const token = localStorage.getItem('authToken');
+    // Check if it's a medicine information query (use AI)
+    const medicineKeywords = ['what is', 'tell me about', 'side effect', 'dosage', 'dose', 'interaction', 'paracetamol', 'amoxicillin', 'ibuprofen', 'aspirin', 'antibiotic', 'medicine', 'drug', 'tablet', 'capsule'];
+    const isMedicineQuery = medicineKeywords.some(keyword => lowerQuery.includes(keyword));
 
-      // Check stock queries
-      if (lowerQuery.includes('stock') || lowerQuery.includes('available') || lowerQuery.includes('inventory')) {
-        if (lowerQuery.includes('low')) {
-          return await getLowStockItems(token);
+    if (isMedicineQuery && aiAvailable) {
+      try {
+        const aiResponse = await aiAPI.sendChatMessage(query);
+        if (aiResponse.success) {
+          return `🤖 **AI Response (Google Gemini)**\n\n${aiResponse.message}\n\n---\n💡 *Powered by Google Gemini AI*`;
         }
-        
-        // Extract medicine name
-        const medicineNames = ['paracetamol', 'amoxicillin', 'ibuprofen', 'metformin', 'omeprazole', 'aspirin', 'cetirizine', 'vitamin', 'azithromycin', 'losartan'];
-        const foundMedicine = medicineNames.find(med => lowerQuery.includes(med));
-        
-        if (foundMedicine) {
-          return await checkMedicineStock(foundMedicine, token);
-        }
-        
-        return await getAllStock(token);
+      } catch (error) {
+        console.error('AI API error:', error);
+        // Fall through to local responses
       }
-
-      // Check expiry queries
-      if (lowerQuery.includes('expir') || lowerQuery.includes('expire')) {
-        return await getExpiringItems(token);
-      }
-
-      // Reorder suggestions
-      if (lowerQuery.includes('reorder') || lowerQuery.includes('order') || lowerQuery.includes('buy')) {
-        return await getReorderSuggestions(token);
-      }
-
-      // Search medicine
-      if (lowerQuery.includes('search') || lowerQuery.includes('find')) {
-        const medicineNames = ['paracetamol', 'amoxicillin', 'ibuprofen', 'metformin', 'omeprazole', 'aspirin', 'cetirizine', 'vitamin', 'azithromycin', 'losartan'];
-        const foundMedicine = medicineNames.find(med => lowerQuery.includes(med));
-        
-        if (foundMedicine) {
-          return await searchMedicine(foundMedicine, token);
-        }
-        
-        return "Please specify which medicine you're looking for. For example: 'search paracetamol' or 'find ibuprofen'";
-      }
-
-      // Sales info
-      if (lowerQuery.includes('sales') || lowerQuery.includes('revenue')) {
-        return await getSalesInfo(token);
-      }
-
-      // Help
-      if (lowerQuery.includes('help') || lowerQuery.includes('what can you do')) {
-        return `I can help you with:
-
-**Stock Management**
-• "Check stock" - View all inventory
-• "Low stock items" - Items needing reorder
-• "Check paracetamol stock" - Specific medicine
-
-**Expiry Tracking**
-• "Expiring items" - Items expiring soon
-• "Check expiry dates" - View expiry status
-
-**Reordering**
-• "Reorder suggestions" - What to order
-• "What should I order?" - Smart suggestions
-
-**Search**
-• "Search [medicine name]" - Find specific medicine
-• "Find ibuprofen" - Quick search
-
-**Analytics**
-• "Sales today" - Today's revenue
-• "Sales report" - Sales summary
-
-Just ask me anything!`;
-      }
-
-      // Default response
-      return `I understand you're asking about "${query}". 
-
-I can help you with:
-• Stock checking (e.g., "check stock", "low stock items")
-• Expiry tracking (e.g., "expiring items")
-• Reorder suggestions (e.g., "what should I order?")
-• Medicine search (e.g., "search paracetamol")
-• Sales info (e.g., "today's sales")
-
-Type "help" to see all commands!`;
-
-    } catch (error) {
-      return "Sorry, I encountered an error. Please make sure you're logged in and try again.";
     }
+
+    // Local inventory queries
+    if (lowerQuery.includes('stock') && !lowerQuery.includes('low')) {
+      return await getAllStock(token);
+    }
+    
+    if (lowerQuery.includes('low stock') || lowerQuery.includes('low on stock')) {
+      return await getLowStockItems(token);
+    }
+    
+    if (lowerQuery.includes('expir')) {
+      return await getExpiringItems(token);
+    }
+    
+    if (lowerQuery.includes('reorder') || lowerQuery.includes('order')) {
+      return await getReorderSuggestions(token);
+    }
+    
+    if (lowerQuery.includes('sales') || lowerQuery.includes('revenue')) {
+      return await getSalesInfo(token);
+    }
+    
+    if (lowerQuery.includes('search') || lowerQuery.includes('find') || lowerQuery.includes('check')) {
+      const words = query.split(' ');
+      const medicineName = words[words.length - 1];
+      return await searchMedicine(medicineName, token);
+    }
+
+    // Default help response
+    return `I can help you with:
+
+**Medicine Information** (AI-powered)
+• "What is Paracetamol used for?"
+• "Side effects of Amoxicillin"
+• "Dosage for Ibuprofen"
+
+**Inventory Management**
+• "Check stock" - View inventory summary
+• "Low stock" - See items running low
+• "Expiring items" - Check medicines expiring soon
+• "Reorder suggestions" - Get AI recommendations
+• "Search [medicine]" - Find specific medicine
+
+${aiAvailable ? '✅ AI Assistant is online' : '⚠️ AI Assistant is offline (using local responses)'}`;
   };
 
   const getAllStock = async (token) => {
@@ -142,7 +125,8 @@ Type "help" to see all commands!`;
       const res = await fetch('http://localhost:3001/api/products', {
         headers: { Authorization: `Bearer ${token}` }
       });
-      const products = await res.json();
+      let products = await res.json();
+      if (!Array.isArray(products)) products = [];
 
       if (products.length === 0) {
         return "No products found in inventory.";
@@ -170,7 +154,8 @@ Would you like to see low stock items or expiring items?`;
       const res = await fetch('http://localhost:3001/api/products', {
         headers: { Authorization: `Bearer ${token}` }
       });
-      const products = await res.json();
+      let products = await res.json();
+      if (!Array.isArray(products)) products = [];
 
       const lowStock = products.filter(p => p.quantity > 0 && p.quantity <= (p.reorderLevel || 10));
 
@@ -180,7 +165,7 @@ Would you like to see low stock items or expiring items?`;
 
       let response = `**Low Stock Alert** (${lowStock.length} items)\n\n`;
       lowStock.slice(0, 5).forEach(item => {
-        response += `• ${item.name}\n  Stock: ${item.quantity} | Price: Rs${item.price}\n\n`;
+        response += `• ${item.name}\n  Stock: ${item.quantity} | Price: Rs${parseFloat(item.price).toFixed(2)}\n\n`;
       });
 
       if (lowStock.length > 5) {
@@ -199,7 +184,8 @@ Would you like to see low stock items or expiring items?`;
       const res = await fetch('http://localhost:3001/api/products', {
         headers: { Authorization: `Bearer ${token}` }
       });
-      const products = await res.json();
+      let products = await res.json();
+      if (!Array.isArray(products)) products = [];
 
       const now = new Date();
       const ninetyDaysLater = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
@@ -236,7 +222,8 @@ Would you like to see low stock items or expiring items?`;
       const res = await fetch('http://localhost:3001/api/products', {
         headers: { Authorization: `Bearer ${token}` }
       });
-      const products = await res.json();
+      let products = await res.json();
+      if (!Array.isArray(products)) products = [];
 
       const found = products.filter(p => 
         p.name.toLowerCase().includes(medicineName.toLowerCase())
@@ -253,7 +240,7 @@ Would you like to see low stock items or expiring items?`;
         
         response += `• ${item.name}\n`;
         response += `  Stock: ${item.quantity}\n`;
-        response += `  Price: Rs${item.price}\n`;
+        response += `  Price: Rs${parseFloat(item.price).toFixed(2)}\n`;
         response += `  Batch: ${item.batchNumber}\n`;
         response += `  Expires: ${expiryDate.toLocaleDateString()} (${daysLeft} days)\n`;
         response += `  Status: ${item.status}\n\n`;
@@ -274,7 +261,8 @@ Would you like to see low stock items or expiring items?`;
       const res = await fetch('http://localhost:3001/api/products', {
         headers: { Authorization: `Bearer ${token}` }
       });
-      const products = await res.json();
+      let products = await res.json();
+      if (!Array.isArray(products)) products = [];
 
       const needsReorder = products.filter(p => p.quantity <= (p.reorderLevel || 10));
 
@@ -297,7 +285,7 @@ Would you like to see low stock items or expiring items?`;
 
       const totalCost = needsReorder.slice(0, 5).reduce((sum, item) => {
         const suggestedQty = Math.max(100, item.quantity * 3);
-        return sum + (suggestedQty * item.price);
+        return sum + (suggestedQty * parseFloat(item.price));
       }, 0);
 
       response += `Estimated Total: Rs${totalCost.toLocaleString()}`;
@@ -316,10 +304,10 @@ Would you like to see low stock items or expiring items?`;
 
       return `**Sales Summary**
 
-Today's Sales: Rs${stats.todaysSales.toLocaleString()}
-Total Products: ${stats.totalSKUs}
-Low Stock Items: ${stats.predictedShortages}
-Expiring Soon: ${stats.expiringItems}
+Today's Sales: Rs${(stats.todaysSales || 0).toLocaleString()}
+Total Products: ${stats.totalSKUs || 0}
+Low Stock Items: ${stats.predictedShortages || 0}
+Expiring Soon: ${stats.expiringItems || 0}
 
 Your pharmacy is performing well! Keep monitoring stock levels.`;
     } catch (error) {
@@ -380,7 +368,7 @@ Your pharmacy is performing well! Keep monitoring stock levels.`;
 
           {/* Messages */}
           <div className="chatbot-messages">
-            {messages.map((msg, index) => (
+            {Array.isArray(messages) && messages.map((msg, index) => (
               <div key={index} className={`message ${msg.type}`}>
                 {msg.type === 'bot' && (
                   <div className="message-avatar">
@@ -421,7 +409,7 @@ Your pharmacy is performing well! Keep monitoring stock levels.`;
           {/* Quick Actions */}
           {messages.length <= 2 && (
             <div className="chatbot-quick-actions">
-              {quickActions.map((action, index) => (
+              {Array.isArray(quickActions) && quickActions.map((action, index) => (
                 <button
                   key={index}
                   className="quick-action-btn"

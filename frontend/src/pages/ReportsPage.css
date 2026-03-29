@@ -76,6 +76,23 @@
   cursor: pointer;
 }
 
+.control-group .date-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 14px;
+  background: white;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.control-group .date-input:focus {
+  outline: none;
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
 .generate-btn {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;

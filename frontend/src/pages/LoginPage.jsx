@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import "./LoginPage.css";
 import { authAPI } from "../services/api";
+import GoogleSignIn from "../components/GoogleSignIn";
 
 export default function LoginPage({ onSwitchToSignup, onLogin, onBackToLanding, onSwitchToForgotPassword }) {
   const [formData, setFormData] = useState({
@@ -64,6 +65,18 @@ export default function LoginPage({ onSwitchToSignup, onLogin, onBackToLanding, 
       });
       
       console.log('Login successful:', response);
+      
+      // Store token in localStorage
+      if (response.token) {
+        localStorage.setItem('token', response.token);
+        localStorage.setItem('authToken', response.token); // Backup for compatibility
+      }
+      
+      // Store user info
+      if (response.user) {
+        localStorage.setItem('user', JSON.stringify(response.user));
+      }
+      
       onLogin(); // Navigate to dashboard
       
     } catch (error) {
@@ -76,7 +89,28 @@ export default function LoginPage({ onSwitchToSignup, onLogin, onBackToLanding, 
     }
   };
 
+  const handleGoogleSuccess = (result) => {
+    console.log('Google Sign-In successful:', result);
+    
+    // Store token if provided
+    if (result.token) {
+      localStorage.setItem('token', result.token);
+      localStorage.setItem('authToken', result.token);
+    }
+    
+    // Store user info
+    if (result.user) {
+      localStorage.setItem('user', JSON.stringify(result.user));
+    }
+    
+    onLogin(); // Navigate to dashboard
+  };
 
+  const handleGoogleError = (error) => {
+    setErrors({ 
+      general: error || 'Google Sign-In failed. Please try again.' 
+    });
+  };
 
   const togglePasswordVisibility = () => {
     setShowPassword(!showPassword);
@@ -183,6 +217,11 @@ export default function LoginPage({ onSwitchToSignup, onLogin, onBackToLanding, 
               <span className="link-text" onClick={onSwitchToForgotPassword}>Forgot Password?</span>
             </div>
           </form>
+
+          <GoogleSignIn 
+            onSuccess={handleGoogleSuccess}
+            onError={handleGoogleError}
+          />
           
           <div className="switch-page">
             <p>Don't have an account? <span className="link-text" onClick={onSwitchToSignup}>Sign up</span></p>

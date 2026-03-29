@@ -9,6 +9,7 @@ import AdminDashboard from './pages/AdminDashboard';
 import StaffDashboard from './pages/StaffDashboard';
 import ReportsPage from './pages/ReportsPage';
 import AccountSettings from './pages/AccountSettings';
+import MedicineDetail from './pages/MedicineDetail';
 import { authAPI } from './services/api';
 
 function App() {
@@ -23,9 +24,24 @@ function App() {
     const checkAuth = () => {
       if (authAPI.isAuthenticated()) {
         const user = JSON.parse(localStorage.getItem('user') || '{}');
+        
+        // Fix old user data with "youba" name
+        if (user.fullName === 'youba' || user.fullName === 'youba11@gmail.com') {
+          // Clear old data and force re-login
+          localStorage.clear();
+          setIsLoggedIn(false);
+          setUserRole(null);
+          setCurrentPage('landing');
+          setIsLoading(false);
+          return;
+        }
         setUserRole(user.role);
         setIsLoggedIn(true);
-        setCurrentPage('dashboard');
+        
+        // Intercept return redirects from eSewa sandbox to land automatically on the Dashboard
+        if (window.location.search.includes('esewa=')) {
+          setCurrentPage('dashboard');
+        }
       }
       setIsLoading(false);
     };
@@ -57,6 +73,15 @@ function App() {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
     setUserRole(user.role);
     setIsLoggedIn(true);
+    // After login, go to dashboard
+    setCurrentPage('dashboard');
+  };
+
+  const handleSignup = () => {
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    setUserRole(user.role);
+    setIsLoggedIn(true);
+    // After signup, go to dashboard
     setCurrentPage('dashboard');
   };
 
@@ -99,6 +124,22 @@ function App() {
   if (isLoggedIn) {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
     
+    // If user is logged in but on landing page, show landing page with dashboard option
+    if (currentPage === 'landing') {
+      return (
+        <div className="App">
+          <LandingPage 
+            onSwitchToLogin={switchToLogin} 
+            onSwitchToSignup={switchToSignup}
+            isLoggedIn={true}
+            user={user}
+            onGoToDashboard={() => setCurrentPage('dashboard')}
+            onLogout={handleLogout}
+          />
+        </div>
+      );
+    }
+    
     if (currentPage === 'accountSettings') {
       return (
         <div className="App">
@@ -109,12 +150,12 @@ function App() {
     
     return (
       <div className="App">
-        {user.role === 'Admin' ? (
-          <AdminDashboard onLogout={handleLogout} onAccountSettings={handleAccountSettings} />
-        ) : user.role === 'Staff' ? (
+        {user.role === 'Staff' ? (
           <StaffDashboard onLogout={handleLogout} onAccountSettings={handleAccountSettings} />
+        ) : user.role === 'Admin' ? (
+          <AdminDashboard onLogout={handleLogout} onAccountSettings={handleAccountSettings} />
         ) : (
-          <Dashboard onLogout={handleLogout} onAccountSettings={handleAccountSettings} />
+          <Dashboard onLogout={handleLogout} onAccountSettings={handleAccountSettings} userRole={user.role} />
         )}
       </div>
     );
@@ -132,7 +173,7 @@ function App() {
           onSwitchToForgotPassword={switchToForgotPassword}
         />
       ) : currentPage === 'signup' ? (
-        <SignupPage onSwitchToLogin={switchToLogin} onSignup={handleLogin} onBackToLanding={switchToLanding} />
+        <SignupPage onSwitchToLogin={switchToLogin} onSignup={handleSignup} onBackToLanding={switchToLanding} />
       ) : currentPage === 'forgotPassword' ? (
         <ForgotPasswordPage onBackToLogin={switchToLogin} onSwitchToReset={switchToResetPassword} />
       ) : currentPage === 'resetPassword' ? (

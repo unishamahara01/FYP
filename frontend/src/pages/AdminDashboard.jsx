@@ -1,204 +1,855 @@
-import React, { useEffect, useState } from "react";
-import "./AdminDashboard.css";
-import UserProfileDropdown from "../components/UserProfileDropdown";
-import AIChatbot from "../components/AIChatbot";
+import React from 'react';
+import './AdminDashboard.css';
+import { renderModals } from './AdminDashboardModals';
+import AdminReportsPage from './AdminReportsPage';
+import SuppliersPage from './SuppliersPage';
+import CustomersPage from './CustomersPage';
 
-export default function AdminDashboard({ onLogout, onAccountSettings }) {
-  const [users, setUsers] = useState([]);
-  const [filteredUsers, setFilteredUsers] = useState([]);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
+const AdminDashboard = ({ onLogout, onAccountSettings }) => {
+  const [activeTab, setActiveTab] = React.useState('users');
+  const [users, setUsers] = React.useState([]);
+  const [departments, setDepartments] = React.useState([]);
+  const [pharmacies, setPharmacies] = React.useState([]);
+  const [suppliers, setSuppliers] = React.useState([]);
+  const [customers, setCustomers] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState('');
+  const [searchQuery, setSearchQuery] = React.useState('');
+  
+  // Modal states
+  const [showAddModal, setShowAddModal] = React.useState(false);
+  const [showEditModal, setShowEditModal] = React.useState(false);
+  const [editingItem, setEditingItem] = React.useState(null);
+  
+  // Form states
+  const [formData, setFormData] = React.useState({});
+  const [formErrors, setFormErrors] = React.useState({});
 
-  const [showAddUserModal, setShowAddUserModal] = useState(false);
-  const [showEditUserModal, setShowEditUserModal] = useState(false);
+  // Get current user info
+  const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
 
-  const [newUser, setNewUser] = useState({
-    fullName: "",
-    email: "",
-    password: "",
-    role: "Pharmacist",
-  });
+  // Fetch data on component mount and tab change
+  React.useEffect(() => {
+    setSearchQuery(''); // Reset search when changing tabs
+    fetchData();
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [editingUser, setEditingUser] = useState(null);
-  const [formErrors, setFormErrors] = useState({});
-  const [successMessage, setSuccessMessage] = useState("");
+  // Fetch counts for stats cards on mount
+  React.useEffect(() => {
+    fetchAllCounts();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const currentUser = JSON.parse(localStorage.getItem("user") || "{}");
-
-  /* ---------------- FETCH USERS ---------------- */
-  const fetchUsers = async () => {
+  const fetchAllCounts = async () => {
     try {
-      setIsLoading(true);
-      const token = localStorage.getItem("authToken");
+      const token = localStorage.getItem('token');
+      if (!token) return;
 
-      const res = await fetch("http://localhost:3001/api/admin/users", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      // Fetch all counts in parallel
+      const [usersRes, deptRes, pharmRes, suppRes, custRes] = await Promise.all([
+        fetch('http://localhost:3001/api/admin/users', { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch('http://localhost:3001/api/admin/departments', { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch('http://localhost:3001/api/admin/pharmacies', { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch('http://localhost:3001/api/suppliers', { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch('http://localhost:3001/api/customers', { headers: { 'Authorization': `Bearer ${token}` } })
+      ]);
 
-      if (!res.ok) throw new Error("Failed to fetch users");
-
-      const data = await res.json();
-      setUsers(data.users || []);
-      setFilteredUsers(data.users || []);
-      setError(null);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setIsLoading(false);
+      if (usersRes.ok) {
+        const data = await usersRes.json();
+        setUsers(Array.isArray(data.users) ? data.users : (Array.isArray(data) ? data : []));
+      }
+      if (deptRes.ok) {
+        const data = await deptRes.json();
+        setDepartments(Array.isArray(data.departments) ? data.departments : (Array.isArray(data) ? data : []));
+      }
+      if (pharmRes.ok) {
+        const data = await pharmRes.json();
+        setPharmacies(Array.isArray(data.pharmacies) ? data.pharmacies : (Array.isArray(data) ? data : []));
+      }
+      if (suppRes.ok) {
+        const data = await suppRes.json();
+        setSuppliers(Array.isArray(data) ? data : []);
+      }
+      if (custRes.ok) {
+        const data = await custRes.json();
+        setCustomers(Array.isArray(data) ? data : []);
+      }
+    } catch (error) {
+      console.error('Error fetching counts:', error);
     }
   };
 
-  useEffect(() => {
-    fetchUsers();
-  }, []);
+  const fetchData = async () => {
+    if (activeTab === 'reports' || activeTab === 'suppliers' || activeTab === 'customers') return; // These pages handle their own data fetching
+    
+    setLoading(true);
+    setError('');
+    try {
+      const token = localStorage.getItem('token');
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      
+      if (!token) {
+        setError('Please login to access admin dashboard');
+        setLoading(false);
+        return;
+      }
+      
+      const response = await fetch(`http://localhost:3001/api/admin/${activeTab}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
 
-  useEffect(() => {
-    const q = searchQuery.toLowerCase();
-    setFilteredUsers(
-      users.filter(
-        (u) =>
-          u.fullName.toLowerCase().includes(q) ||
-          u.email.toLowerCase().includes(q) ||
-          u.role.toLowerCase().includes(q)
-      )
-    );
-  }, [searchQuery, users]);
+      if (!response.ok) {
+        if (response.status === 403) {
+          setError(`Access denied. Admin role required. Your role: ${user.role || 'Unknown'}`);
+        } else {
+          throw new Error(`Failed to fetch ${activeTab}: ${response.status} ${response.statusText}`);
+        }
+        setLoading(false);
+        return;
+      }
 
-  // Auto-hide success message after 3 seconds
-  useEffect(() => {
-    if (successMessage) {
-      const timer = setTimeout(() => setSuccessMessage(""), 3000);
-      return () => clearTimeout(timer);
+      const data = await response.json();
+      
+      if (activeTab === 'users') {
+        setUsers(Array.isArray(data.users) ? data.users : (Array.isArray(data) ? data : []));
+      } else if (activeTab === 'departments') {
+        setDepartments(Array.isArray(data.departments) ? data.departments : (Array.isArray(data) ? data : []));
+        // Pre-fetch users globally to populate the new Manager Dropdown dynamically!
+        try {
+          const userRes = await fetch('http://localhost:3001/api/admin/users', {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (userRes.ok) {
+            const userData = await userRes.json();
+            setUsers(Array.isArray(userData.users) ? userData.users : (Array.isArray(userData) ? userData : []));
+          }
+        } catch (e) {
+          console.error("Silent err fetching dropdown users", e);
+        }
+      } else if (activeTab === 'pharmacies') {
+        setPharmacies(Array.isArray(data.pharmacies) ? data.pharmacies : (Array.isArray(data) ? data : []));
+      } else if (activeTab === 'suppliers') {
+        setSuppliers(Array.isArray(data.suppliers) ? data.suppliers : (Array.isArray(data) ? data : []));
+      } else if (activeTab === 'customers') {
+        setCustomers(Array.isArray(data.customers) ? data.customers : (Array.isArray(data) ? data : []));
+      }
+    } catch (err) {
+      setError(err.message);
+      console.error(`❌ Error fetching ${activeTab}:`, err);
+    } finally {
+      setLoading(false);
     }
-  }, [successMessage]);
+  };
 
-  /* ---------------- ADD USER ---------------- */
-  const handleAddUser = async (e) => {
+  const handleAdd = async (e) => {
     e.preventDefault();
     setFormErrors({});
+    
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:3001/api/admin/${activeTab}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(formData)
+      });
 
-    if (!newUser.fullName || !newUser.email || newUser.password.length < 6) {
-      setFormErrors({ general: "All fields required (password ≥ 6 chars)" });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Failed to add ${activeTab.slice(0, -1)}`);
+      }
+
+      setShowAddModal(false);
+      setFormData({});
+      fetchData();
+    } catch (err) {
+      setFormErrors({ general: err.message });
+    }
+  };
+
+  const handleUpdate = async (e) => {
+    e.preventDefault();
+    setFormErrors({});
+    
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:3001/api/admin/${activeTab}/${editingItem._id}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(formData)
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Failed to update ${activeTab.slice(0, -1)}`);
+      }
+
+      setShowEditModal(false);
+      setEditingItem(null);
+      setFormData({});
+      fetchData();
+    } catch (err) {
+      setFormErrors({ general: err.message });
+    }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm(`Are you sure you want to delete this ${activeTab.slice(0, -1)}?`)) {
       return;
     }
 
     try {
-      const token = localStorage.getItem("authToken");
-
-      const res = await fetch("http://localhost:3001/api/admin/users", {
-        method: "POST",
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:3001/api/admin/${activeTab}/${id}`, {
+        method: 'DELETE',
         headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(newUser),
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
       });
 
-      if (!res.ok) throw new Error("Failed to add user");
+      if (!response.ok) {
+        throw new Error(`Failed to delete ${activeTab.slice(0, -1)}`);
+      }
 
-      setShowAddUserModal(false);
-      setNewUser({ fullName: "", email: "", password: "", role: "Pharmacist" });
-      setSuccessMessage("✓ User added successfully!");
-      fetchUsers();
-    } catch (err) {
-      setFormErrors({ general: err.message });
-    }
-  };
-
-  /* ---------------- EDIT USER ---------------- */
-  const handleUpdateUser = async (e) => {
-    e.preventDefault();
-    setFormErrors({});
-
-    try {
-      const token = localStorage.getItem("authToken");
-
-      const res = await fetch(
-        `http://localhost:3001/api/admin/users/${editingUser._id || editingUser.id}`,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify(editingUser),
-        }
-      );
-
-      if (!res.ok) throw new Error("Failed to update user");
-
-      setShowEditUserModal(false);
-      setEditingUser(null);
-      setSuccessMessage("✓ User updated successfully!");
-      fetchUsers();
-    } catch (err) {
-      setFormErrors({ general: err.message });
-    }
-  };
-
-  /* ---------------- DELETE USER ---------------- */
-  const handleDeleteUser = async (id) => {
-    if (!window.confirm("Are you sure you want to delete this user?")) return;
-
-    try {
-      const token = localStorage.getItem("authToken");
-
-      const res = await fetch(
-        `http://localhost:3001/api/admin/users/${id}`,
-        {
-          method: "DELETE",
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
-
-      if (!res.ok) throw new Error("Failed to delete user");
-
-      setSuccessMessage("✓ User deleted successfully!");
-      fetchUsers();
+      fetchData();
     } catch (err) {
       setError(err.message);
     }
   };
 
-  /* ================= JSX ================= */
+  const openEditModal = (item) => {
+    setEditingItem(item);
+    
+    // Handle nested objects for pharmacy data
+    if (activeTab === 'pharmacies') {
+      setFormData({
+        ...item,
+        // Ensure address object exists
+        address: item.address || {},
+        // Ensure contact object exists  
+        contact: item.contact || {},
+        // Ensure license object exists
+        license: item.license || {},
+        // Backward compatibility fields
+        phone: item.contact?.phone || item.phone || '',
+        email: item.contact?.email || item.email || '',
+        licenseNumber: item.license?.number || item.licenseNumber || ''
+      });
+    } else {
+      setFormData({ ...item });
+    }
+    
+    setShowEditModal(true);
+  };
+
+  // Fetch data on component mount and tab change
+  React.useEffect(() => {
+    fetchData();
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const renderFormFields = (isEdit) => {
+    if (activeTab === 'users') {
+      return (
+        <>
+          <div className="form-group">
+            <label>Full Name</label>
+            <input
+              type="text"
+              value={formData.fullName || ''}
+              onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label>Email</label>
+            <input
+              type="email"
+              value={formData.email || ''}
+              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+              required
+            />
+          </div>
+          {!isEdit && (
+            <div className="form-group">
+              <label>Password</label>
+              <input
+                type="password"
+                value={formData.password || ''}
+                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                required
+              />
+            </div>
+          )}
+          <div className="form-group">
+            <label>Role</label>
+            <select
+              value={formData.role || ''}
+              onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+              required
+            >
+              <option value="">Select Role</option>
+              <option value="Admin">Admin</option>
+              <option value="Pharmacist">Pharmacist</option>
+              <option value="Staff">Staff</option>
+            </select>
+          </div>
+        </>
+      );
+    } else if (activeTab === 'departments') {
+      return (
+        <>
+          <div className="form-group">
+            <label>Department Name</label>
+            <input
+              type="text"
+              value={formData.name || ''}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label>Description</label>
+            <textarea
+              value={formData.description || ''}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              rows="3"
+            />
+          </div>
+          <div className="form-group">
+            <label>Manager</label>
+            <select
+              value={formData.manager || ''}
+              onChange={(e) => setFormData({ ...formData, manager: e.target.value })}
+            >
+              <option value="">No Manager Assigned (Optional)</option>
+              {Array.isArray(users) && users.map(user => (
+                <option key={user._id} value={user._id}>
+                  {user.fullName} ({user.role || 'Staff'})
+                </option>
+              ))}
+            </select>
+          </div>
+        </>
+      );
+    } else if (activeTab === 'pharmacies') {
+      return (
+        <>
+          <div className="form-group">
+            <label>Pharmacy Name</label>
+            <input
+              type="text"
+              value={formData.name || ''}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label>Pharmacy Code</label>
+            <input
+              type="text"
+              value={formData.code || ''}
+              onChange={(e) => setFormData({ ...formData, code: e.target.value.toUpperCase() })}
+              placeholder="e.g., PH001"
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label>Street Address</label>
+            <input
+              type="text"
+              value={formData.address?.street || ''}
+              onChange={(e) => setFormData({ 
+                ...formData, 
+                address: { ...formData.address, street: e.target.value }
+              })}
+              placeholder="Street address"
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label>City</label>
+            <input
+              type="text"
+              value={formData.address?.city || ''}
+              onChange={(e) => setFormData({ 
+                ...formData, 
+                address: { ...formData.address, city: e.target.value }
+              })}
+              placeholder="e.g., Kathmandu, Pokhara"
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label>Province</label>
+            <select
+              value={formData.address?.state || ''}
+              onChange={(e) => setFormData({ 
+                ...formData, 
+                address: { ...formData.address, state: e.target.value }
+              })}
+              required
+            >
+              <option value="">Select Province</option>
+              <option value="Province No. 1 (Koshi)">Province No. 1 (Koshi)</option>
+              <option value="Madhesh Province">Madhesh Province</option>
+              <option value="Bagmati Province">Bagmati Province</option>
+              <option value="Gandaki Province">Gandaki Province</option>
+              <option value="Lumbini Province">Lumbini Province</option>
+              <option value="Karnali Province">Karnali Province</option>
+              <option value="Sudurpashchim Province">Sudurpashchim Province</option>
+            </select>
+          </div>
+          <div className="form-group">
+            <label>Phone</label>
+            <input
+              type="tel"
+              value={formData.contact?.phone || formData.phone || ''}
+              onChange={(e) => setFormData({ 
+                ...formData, 
+                contact: { ...formData.contact, phone: e.target.value },
+                phone: e.target.value // For backward compatibility
+              })}
+              placeholder="e.g., +977-1-4567890"
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label>Email</label>
+            <input
+              type="email"
+              value={formData.contact?.email || formData.email || ''}
+              onChange={(e) => setFormData({ 
+                ...formData, 
+                contact: { ...formData.contact, email: e.target.value },
+                email: e.target.value // For backward compatibility
+              })}
+              placeholder="Email address"
+            />
+          </div>
+          <div className="form-group">
+            <label>License Number</label>
+            <input
+              type="text"
+              value={formData.license?.number || formData.licenseNumber || ''}
+              onChange={(e) => setFormData({ 
+                ...formData, 
+                license: { ...formData.license, number: e.target.value },
+                licenseNumber: e.target.value // For backward compatibility
+              })}
+              placeholder="License number"
+              required
+            />
+          </div>
+          <div className="form-group">
+            <label>Department</label>
+            <select
+              value={formData.department || ''}
+              onChange={(e) => setFormData({ ...formData, department: e.target.value })}
+              required
+            >
+              <option value="">Select Department</option>
+              {Array.isArray(departments) && departments.map(dept => (
+                <option key={dept._id} value={dept._id}>{dept.name}</option>
+              ))}
+            </select>
+          </div>
+        </>
+      );
+    }
+  };
+
+  const getStatsData = () => {
+    return {
+      users: users.length,
+      departments: departments.length,
+      pharmacies: pharmacies.length,
+      suppliers: suppliers.length,
+      customers: customers.length,
+      activeUsers: Array.isArray(users) ? users.filter(u => u.status === 'Active').length : 0
+    };
+  };
+
+  const renderStatsCards = () => {
+    const stats = getStatsData();
+    
+    return (
+      <div className="admin-stats-grid">
+        <div className="admin-stat-card">
+          <div className="admin-stat-icon users">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </div>
+          <div className="admin-stat-content">
+            <div className="admin-stat-number">{stats.users}</div>
+            <div className="admin-stat-label">Total Users</div>
+          </div>
+        </div>
+
+        <div className="admin-stat-card">
+          <div className="admin-stat-icon departments">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+              <line x1="9" y1="9" x2="15" y2="9"/>
+              <line x1="9" y1="15" x2="15" y2="15"/>
+            </svg>
+          </div>
+          <div className="admin-stat-content">
+            <div className="admin-stat-number">{stats.departments}</div>
+            <div className="admin-stat-label">Departments</div>
+          </div>
+        </div>
+
+        <div className="admin-stat-card">
+          <div className="admin-stat-icon pharmacies">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+            </svg>
+          </div>
+          <div className="admin-stat-content">
+            <div className="admin-stat-number">{stats.pharmacies}</div>
+            <div className="admin-stat-label">Pharmacies</div>
+          </div>
+        </div>
+
+        <div className="admin-stat-card">
+          <div className="admin-stat-icon suppliers" style={{background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'}}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+            </svg>
+          </div>
+          <div className="admin-stat-content">
+            <div className="admin-stat-number">{stats.suppliers}</div>
+            <div className="admin-stat-label">Suppliers</div>
+          </div>
+        </div>
+
+        <div className="admin-stat-card">
+          <div className="admin-stat-icon customers" style={{background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)'}}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+              <circle cx="9" cy="7" r="4"/>
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+          </div>
+          <div className="admin-stat-content">
+            <div className="admin-stat-number">{stats.customers}</div>
+            <div className="admin-stat-label">Customers</div>
+          </div>
+        </div>
+
+        <div className="admin-stat-card">
+          <div className="admin-stat-icon active">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="20,6 9,17 4,12"/>
+            </svg>
+          </div>
+          <div className="admin-stat-content">
+            <div className="admin-stat-number">{stats.activeUsers}</div>
+            <div className="admin-stat-label">Active Users</div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+  const renderTable = () => {
+    let data = [];
+    let columns = [];
+
+    if (activeTab === 'users') {
+      data = users;
+      columns = ['Full Name', 'Email', 'Role', 'Status', 'Actions'];
+    } else if (activeTab === 'departments') {
+      data = departments;
+      columns = ['Name', 'Description', 'Manager', 'Status', 'Actions'];
+    } else if (activeTab === 'pharmacies') {
+      data = pharmacies;
+      columns = ['Name', 'Address', 'Phone', 'License', 'Department', 'Actions'];
+    }
+
+    // Filter data based on search query
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      data = data.filter(item => {
+        if (activeTab === 'users') {
+          return (
+            item.fullName?.toLowerCase().includes(query) ||
+            item.email?.toLowerCase().includes(query) ||
+            item.role?.toLowerCase().includes(query)
+          );
+        } else if (activeTab === 'departments') {
+          return (
+            item.name?.toLowerCase().includes(query) ||
+            item.description?.toLowerCase().includes(query) ||
+            item.manager?.fullName?.toLowerCase().includes(query)
+          );
+        } else if (activeTab === 'pharmacies') {
+          return (
+            item.name?.toLowerCase().includes(query) ||
+            item.code?.toLowerCase().includes(query) ||
+            item.contact?.phone?.includes(query) ||
+            item.phone?.includes(query)
+          );
+        }
+        return false;
+      });
+    }
+
+    return (
+      <div className="admin-table-container">
+        <table className="admin-data-table">
+          <thead>
+            <tr>
+              {Array.isArray(columns) && columns.map(col => (
+                <th key={col}>{col}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {data.length === 0 ? (
+              <tr>
+                <td colSpan={columns.length} className="admin-no-data">
+                  <div className="admin-empty-state">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1">
+                      <circle cx="11" cy="11" r="8"/>
+                      <path d="M21 21l-4.35-4.35"/>
+                    </svg>
+                    <p>No {activeTab} found</p>
+                    <button 
+                      className="admin-add-first-btn"
+                      onClick={() => {
+                        if (activeTab === 'pharmacies') {
+                          setFormData({
+                            address: {},
+                            contact: {},
+                            license: {}
+                          });
+                        } else {
+                          setFormData({});
+                        }
+                        setShowAddModal(true);
+                      }}
+                    >
+                      Add First {activeTab.slice(0, -1)}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              Array.isArray(data) && data.map(item => (
+                <tr key={item._id}>
+                  {activeTab === 'users' && (
+                    <>
+                      <td>
+                        <div className="admin-user-cell">
+                          <div className="admin-user-avatar">
+                            {item.fullName?.charAt(0)?.toUpperCase() || item.email?.charAt(0)?.toUpperCase() || 'U'}
+                          </div>
+                          <span>{item.fullName || item.email?.split('@')[0]}</span>
+                        </div>
+                      </td>
+                      <td>{item.email}</td>
+                      <td>
+                        <span className={`admin-role-badge ${item.role?.toLowerCase()}`}>
+                          {item.role}
+                        </span>
+                      </td>
+                      <td>
+                        <span className={`admin-status-badge ${item.status === 'Active' ? 'active' : 'inactive'}`}>
+                          {item.status || 'Active'}
+                        </span>
+                      </td>
+                    </>
+                  )}
+                  {activeTab === 'departments' && (
+                    <>
+                      <td>
+                        <div className="admin-dept-cell">
+                          <div className="admin-dept-icon">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                            </svg>
+                          </div>
+                          <span>{item.name}</span>
+                        </div>
+                      </td>
+                      <td>{item.description || 'No description'}</td>
+                      <td>{item.manager?.fullName || 'Not assigned'}</td>
+                      <td>
+                        <span className={`admin-status-badge ${item.status === 'Active' ? 'active' : 'inactive'}`}>
+                          {item.status || 'Active'}
+                        </span>
+                      </td>
+                    </>
+                  )}
+                  {activeTab === 'pharmacies' && (
+                    <>
+                      <td>
+                        <div className="admin-pharmacy-cell">
+                          <div className="admin-pharmacy-icon">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                            </svg>
+                          </div>
+                          <div>
+                            <div className="admin-pharmacy-name">{item.name}</div>
+                            <div className="admin-pharmacy-license">License: {item.licenseNumber}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        {typeof item.address === 'object' && item.address ? 
+                          `${item.address.street || ''}, ${item.address.city || ''}, ${item.address.state || ''}`.replace(/^,\s*|,\s*$/g, '').replace(/,\s*,/g, ',') || 'No address'
+                          : item.address || 'No address'
+                        }
+                      </td>
+                      <td>{item.contact?.phone || item.phone || 'No phone'}</td>
+                      <td>{item.license?.number || item.licenseNumber || 'No license'}</td>
+                      <td>{item.department?.name || 'Not assigned'}</td>
+                    </>
+                  )}
+                  <td>
+                    <div className="admin-action-buttons">
+                      <button
+                        className="admin-edit-btn"
+                        onClick={() => openEditModal(item)}
+                        title="Edit"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                        </svg>
+                      </button>
+                      <button
+                        className="admin-delete-btn"
+                        onClick={() => handleDelete(item._id)}
+                        title="Delete"
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <polyline points="3,6 5,6 21,6"/>
+                          <path d="M19,6v14a2,2,0,0,1-2,2H7a2,2,0,0,1-2-2V6m3,0V4a2,2,0,0,1,2-2h4a2,2,0,0,1,2,2V6"/>
+                        </svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
   return (
     <div className="admin-dashboard-container">
       {/* SIDEBAR */}
-      <aside className="sidebar">
+      <div className="sidebar">
         <div className="sidebar-header">
           <div className="logo">
-            <svg className="logo-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg className="logo-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
             </svg>
             <span className="logo-text">MediTrust</span>
           </div>
         </div>
 
-        <nav className="sidebar-nav">
-          <div className="nav-item active">
+        <div className="sidebar-nav">
+          <div 
+            className={`nav-item ${activeTab === 'users' ? 'active' : ''}`}
+            onClick={() => setActiveTab('users')}
+          >
+            <svg className="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+            <span className="nav-text">Users</span>
+          </div>
+
+          <div 
+            className={`nav-item ${activeTab === 'departments' ? 'active' : ''}`}
+            onClick={() => setActiveTab('departments')}
+          >
+            <svg className="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+              <line x1="9" y1="9" x2="15" y2="9"/>
+              <line x1="9" y1="15" x2="15" y2="15"/>
+            </svg>
+            <span className="nav-text">Departments</span>
+          </div>
+
+          <div 
+            className={`nav-item ${activeTab === 'pharmacies' ? 'active' : ''}`}
+            onClick={() => setActiveTab('pharmacies')}
+          >
+            <svg className="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+            </svg>
+            <span className="nav-text">Pharmacies</span>
+          </div>
+
+          <div 
+            className={`nav-item ${activeTab === 'suppliers' ? 'active' : ''}`}
+            onClick={() => setActiveTab('suppliers')}
+          >
+            <svg className="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+            </svg>
+            <span className="nav-text">Suppliers</span>
+          </div>
+
+          <div 
+            className={`nav-item ${activeTab === 'customers' ? 'active' : ''}`}
+            onClick={() => setActiveTab('customers')}
+          >
             <svg className="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
               <circle cx="9" cy="7" r="4"/>
               <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
               <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
             </svg>
-            <span className="nav-text">User Management</span>
+            <span className="nav-text">Customers</span>
           </div>
-        </nav>
+
+          <div 
+            className={`nav-item ${activeTab === 'reports' ? 'active' : ''}`}
+            onClick={() => setActiveTab('reports')}
+          >
+            <svg className="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            <span className="nav-text">Reports</span>
+          </div>
+        </div>
 
         <div className="sidebar-footer">
           <div className="user-profile-sidebar">
             <div className="user-avatar-sidebar">
-              {(currentUser.fullName || 'A').charAt(0).toUpperCase()}
+              {currentUser.fullName?.charAt(0)?.toUpperCase() || currentUser.email?.charAt(0)?.toUpperCase() || 'A'}
             </div>
             <div className="user-info-sidebar">
-              <div className="user-name-sidebar">{currentUser.fullName || 'Admin'}</div>
+              <div className="user-name-sidebar">
+                {currentUser.fullName || currentUser.email?.split('@')[0] || 'Admin'}
+              </div>
               <div className="user-role-sidebar">{currentUser.role || 'Administrator'}</div>
             </div>
           </div>
           <button className="logout-btn" onClick={onLogout}>
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
               <polyline points="16,17 21,12 16,7"/>
               <line x1="21" y1="12" x2="9" y2="12"/>
@@ -206,293 +857,157 @@ export default function AdminDashboard({ onLogout, onAccountSettings }) {
             Logout
           </button>
         </div>
-      </aside>
+      </div>
 
       {/* MAIN CONTENT */}
-      <main className="main-content">
-        {/* HEADER */}
-        <header className="dashboard-header">
-          <div className="header-left">
-            <div className="breadcrumb">
-              <svg className="breadcrumb-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-                <polyline points="9,22 9,12 15,12 15,22"/>
-              </svg>
-              <span className="breadcrumb-separator">›</span>
-              <span className="breadcrumb-text">MediTrust</span>
+      <div className="main-content">
+        <div className="dashboard-header">
+          <div className="header-content">
+            <div className="header-left">
+              <h1>Admin Dashboard</h1>
+              <p>Manage users, departments, and pharmacies across your organization</p>
             </div>
           </div>
-          <div className="header-right">
-            <UserProfileDropdown user={currentUser} onLogout={onLogout} onAccountSettings={onAccountSettings} />
-          </div>
-        </header>
+        </div>
 
-        {/* SUCCESS/ERROR MESSAGES */}
-        {successMessage && (
-          <div className="success-banner">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="20,6 9,17 4,12"/>
-            </svg>
-            {successMessage}
-          </div>
-        )}
         {error && (
-          <div className="error-banner">
+          <div className="admin-error-banner">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="12" cy="12" r="10"/>
               <line x1="15" y1="9" x2="9" y2="15"/>
               <line x1="9" y1="9" x2="15" y2="15"/>
             </svg>
-            {error}
+            <span>{error}</span>
+            {(error.includes('Admin role required') || error.includes('Please login')) && (
+              <button 
+                className="admin-login-btn"
+                onClick={async () => {
+                  try {
+                    const response = await fetch('http://localhost:3001/api/auth/login', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        email: 'admin@meditrust.com',
+                        password: 'password123'
+                      })
+                    });
+                    
+                    if (response.ok) {
+                      const data = await response.json();
+                      localStorage.setItem('token', data.token);
+                      localStorage.setItem('user', JSON.stringify(data.user));
+                      setError('');
+                      fetchData();
+                    }
+                  } catch (err) {
+                    console.error('Login error:', err);
+                  }
+                }}
+              >
+                Login as Admin
+              </button>
+            )}
+            <button onClick={() => setError('')}>×</button>
           </div>
         )}
 
-        {/* DASHBOARD CONTENT */}
-        <div className="dashboard-content">
-          {/* WELCOME SECTION */}
-          <div className="welcome-section">
-            <h1>Welcome, {currentUser.fullName || 'Admin'}!</h1>
-            <p className="welcome-subtitle">Admin Dashboard • {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
-          </div>
+        <div className="dashboard-body">
+          {/* Stats Cards */}
+          {renderStatsCards()}
 
-          {/* USER MANAGEMENT SECTION */}
-          <div className="management-section">
-            <div className="section-header">
-              <div>
-                <h2>User Management</h2>
-                <p className="section-subtitle">Add, edit, or remove users from the system</p>
-              </div>
-              <button className="add-user-btn" onClick={() => setShowAddUserModal(true)}>
+          {/* Content Section */}
+          <div className="admin-content-section">
+            <div className="admin-content-header">
+              <h2>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  {activeTab === 'users' && (
+                    <>
+                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                      <circle cx="12" cy="7" r="4"/>
+                    </>
+                  )}
+                  {activeTab === 'departments' && (
+                    <>
+                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                      <line x1="9" y1="9" x2="15" y2="9"/>
+                      <line x1="9" y1="15" x2="15" y2="15"/>
+                    </>
+                  )}
+                  {activeTab === 'pharmacies' && (
+                    <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                  )}
+                {activeTab === 'reports' && (
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 10l-5 5-5-5M12 15V3"/>
+                )}
+              </svg>
+              {activeTab === 'reports' ? 'Analytics & Reports' : `${activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Management`}
+            </h2>
+            {activeTab !== 'reports' && activeTab !== 'suppliers' && activeTab !== 'customers' && (
+              <button
+                className="admin-add-button"
+                onClick={() => {
+                  if (activeTab === 'pharmacies') {
+                    setFormData({
+                      address: {},
+                      contact: {},
+                      license: {}
+                    });
+                  } else {
+                    setFormData({});
+                  }
+                  setShowAddModal(true);
+                }}
+              >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <line x1="12" y1="5" x2="12" y2="19"/>
                   <line x1="5" y1="12" x2="19" y2="12"/>
                 </svg>
-                Add New User
+                Add {activeTab.slice(0, -1)}
               </button>
-            </div>
-
-            {/* SEARCH BAR */}
-            <div className="search-container">
-              <svg className="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="11" cy="11" r="8"/>
-                <path d="m21 21-4.35-4.35"/>
-              </svg>
-              <input
-                type="text"
-                className="search-input"
-                placeholder="Search by name, email, or role..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-              {searchQuery && (
-                <button className="clear-search" onClick={() => setSearchQuery("")}>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <line x1="18" y1="6" x2="6" y2="18"/>
-                    <line x1="6" y1="6" x2="18" y2="18"/>
-                  </svg>
-                </button>
-              )}
-            </div>
-
-            {/* USERS TABLE */}
-            {isLoading ? (
-              <div className="loading-state">
-                <div className="spinner"></div>
-                <p>Loading users...</p>
-              </div>
-            ) : (
-              <div className="users-table-container">
-                <table className="users-table">
-                  <thead>
-                    <tr>
-                      <th>User</th>
-                      <th>Email</th>
-                      <th>Role</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredUsers.map((user) => (
-                      <tr key={user._id || user.id}>
-                        <td>
-                          <div className="user-cell">
-                            <div className="user-avatar-small">
-                              {user.fullName.charAt(0).toUpperCase()}
-                            </div>
-                            <span>{user.fullName}</span>
-                          </div>
-                        </td>
-                        <td>{user.email}</td>
-                        <td>
-                          <span className={`role-badge ${user.role.toLowerCase()}`}>
-                            {user.role}
-                          </span>
-                        </td>
-                        <td>
-                          <div className="action-buttons">
-                            <button
-                              className="edit-btn"
-                              onClick={() => {
-                                setEditingUser(user);
-                                setShowEditUserModal(true);
-                              }}
-                              title="Edit user"
-                            >
-                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                              </svg>
-                            </button>
-                            <button
-                              className="delete-btn"
-                              onClick={() => handleDeleteUser(user._id || user.id)}
-                              disabled={(user._id || user.id) === (currentUser._id || currentUser.id)}
-                              title={(user._id || user.id) === (currentUser._id || currentUser.id) ? "Cannot delete yourself" : "Delete user"}
-                            >
-                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <polyline points="3,6 5,6 21,6"/>
-                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                              </svg>
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
             )}
           </div>
-        </div>
-      </main>
 
-      {/* ADD USER MODAL */}
-      {showAddUserModal && (
-        <div className="modal-overlay" onClick={() => setShowAddUserModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Add New User</h3>
-              <button className="close-btn" onClick={() => setShowAddUserModal(false)}>
+          {activeTab === 'reports' ? (
+            <AdminReportsPage />
+          ) : activeTab === 'suppliers' ? (
+            <SuppliersPage />
+          ) : activeTab === 'customers' ? (
+            <CustomersPage />
+          ) : (
+            <div className="admin-management-container">
+              <div className="admin-search-bar">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18"/>
-                  <line x1="6" y1="6" x2="18" y2="18"/>
+                  <circle cx="11" cy="11" r="8"/>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"/>
                 </svg>
-              </button>
-            </div>
-            <form onSubmit={handleAddUser}>
-              {formErrors.general && (
-                <div className="error-message">{formErrors.general}</div>
-              )}
-              <div className="form-group">
-                <label>Full Name</label>
-                <input
-                  type="text"
-                  placeholder="Enter full name"
-                  value={newUser.fullName}
-                  onChange={(e) => setNewUser({ ...newUser, fullName: e.target.value })}
+                <input 
+                  type="text" 
+                  placeholder={`Search ${activeTab}...`} 
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)} 
                 />
               </div>
-              <div className="form-group">
-                <label>Email Address</label>
-                <input
-                  type="email"
-                  placeholder="Enter email address"
-                  value={newUser.email}
-                  onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
-                />
-              </div>
-              <div className="form-group">
-                <label>Password</label>
-                <input
-                  type="password"
-                  placeholder="Enter password (min 6 characters)"
-                  value={newUser.password}
-                  onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
-                />
-              </div>
-              <div className="form-group">
-                <label>Role</label>
-                <select
-                  value={newUser.role}
-                  onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
-                >
-                  <option value="Pharmacist">Pharmacist</option>
-                  <option value="Admin">Admin</option>
-                  <option value="Staff">Staff</option>
-                </select>
-              </div>
-              <div className="modal-actions">
-                <button type="button" className="cancel-btn" onClick={() => setShowAddUserModal(false)}>
-                  Cancel
-                </button>
-                <button type="submit" className="submit-btn">
-                  Add User
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
-      {/* EDIT USER MODAL */}
-      {showEditUserModal && editingUser && (
-        <div className="modal-overlay" onClick={() => setShowEditUserModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Edit User</h3>
-              <button className="close-btn" onClick={() => setShowEditUserModal(false)}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18"/>
-                  <line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-              </button>
-            </div>
-            <form onSubmit={handleUpdateUser}>
-              {formErrors.general && (
-                <div className="error-message">{formErrors.general}</div>
+              {loading ? (
+                <div className="admin-loading-container">
+                  <div className="admin-loading-spinner"></div>
+                  <p>Loading {activeTab}...</p>
+                </div>
+              ) : (
+                renderTable()
               )}
-              <div className="form-group">
-                <label>Full Name</label>
-                <input
-                  type="text"
-                  value={editingUser.fullName}
-                  onChange={(e) => setEditingUser({ ...editingUser, fullName: e.target.value })}
-                />
-              </div>
-              <div className="form-group">
-                <label>Email Address</label>
-                <input
-                  type="email"
-                  value={editingUser.email}
-                  onChange={(e) => setEditingUser({ ...editingUser, email: e.target.value })}
-                />
-              </div>
-              <div className="form-group">
-                <label>Role</label>
-                <select
-                  value={editingUser.role}
-                  onChange={(e) => setEditingUser({ ...editingUser, role: e.target.value })}
-                >
-                  <option value="Pharmacist">Pharmacist</option>
-                  <option value="Admin">Admin</option>
-                  <option value="Staff">Staff</option>
-                </select>
-              </div>
-              <div className="modal-actions">
-                <button type="button" className="cancel-btn" onClick={() => setShowEditUserModal(false)}>
-                  Cancel
-                </button>
-                <button type="submit" className="submit-btn">
-                  Update User
-                </button>
-              </div>
-            </form>
-          </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
-      {/* AI CHATBOT */}
-      <AIChatbot />
+      {renderModals(
+        showAddModal, setShowAddModal, showEditModal, setShowEditModal,
+        activeTab, formErrors, handleAdd, handleUpdate, renderFormFields
+      )}
+      </div>
     </div>
   );
-}
+};
+
+export default AdminDashboard;

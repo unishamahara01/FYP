@@ -4,14 +4,25 @@ import './ReportsPage.css';
 export default function ReportsPage() {
   const [reportType, setReportType] = useState('sales');
   const [dateRange, setDateRange] = useState('month');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
   const [reportData, setReportData] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const generateReport = async () => {
     setLoading(true);
     try {
-      const token = localStorage.getItem('authToken');
-      const res = await fetch(`http://localhost:3001/api/reports/${reportType}?range=${dateRange}`, {
+      const token = localStorage.getItem('token') || localStorage.getItem('authToken');
+      
+      // If custom dates are provided, use them; otherwise use the date range
+      let url = `http://localhost:3001/api/reports/${reportType}`;
+      if (customStart && customEnd) {
+        url += `?range=custom&start=${customStart}&end=${customEnd}`;
+      } else {
+        url += `?range=${dateRange}`;
+      }
+      
+      const res = await fetch(url, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -24,8 +35,14 @@ export default function ReportsPage() {
   };
 
   useEffect(() => {
-    generateReport();
-  }, [reportType, dateRange]);
+    // Auto-generate report when report type or date range changes
+    // Or when both custom dates are filled
+    if (customStart && customEnd) {
+      generateReport();
+    } else if (!customStart && !customEnd) {
+      generateReport();
+    }
+  }, [reportType, dateRange, customStart, customEnd]);
 
   const exportToPDF = () => {
     window.print();
@@ -63,10 +80,31 @@ export default function ReportsPage() {
           <label>Date Range</label>
           <select value={dateRange} onChange={(e) => setDateRange(e.target.value)}>
             <option value="today">Today</option>
+            <option value="yesterday">Yesterday</option>
             <option value="week">This Week</option>
             <option value="month">This Month</option>
             <option value="year">This Year</option>
           </select>
+        </div>
+
+        <div className="control-group">
+          <label>Start Date</label>
+          <input 
+            type="date" 
+            value={customStart} 
+            onChange={(e) => setCustomStart(e.target.value)} 
+            className="date-input"
+          />
+        </div>
+
+        <div className="control-group">
+          <label>End Date</label>
+          <input 
+            type="date" 
+            value={customEnd} 
+            onChange={(e) => setCustomEnd(e.target.value)} 
+            className="date-input"
+          />
         </div>
 
         <button className="generate-btn" onClick={generateReport}>
@@ -94,7 +132,7 @@ export default function ReportsPage() {
 function SalesReport({ data, range }) {
   return (
     <div className="report-section">
-      <h3>Sales Report - {range.charAt(0).toUpperCase() + range.slice(1)}</h3>
+      <h3>Sales Report - {range === 'custom' ? 'Custom Date Range' : range.charAt(0).toUpperCase() + range.slice(1)}</h3>
       
       <div className="summary-cards">
         <div className="summary-card">
@@ -141,44 +179,55 @@ function InventoryReport({ data }) {
     <div className="report-section">
       <h3>Inventory Report</h3>
       
+      <div className="report-content fade-in">
       <div className="summary-cards">
         <div className="summary-card">
-          <div className="card-label">Total Products</div>
-          <div className="card-value">{data.totalProducts || 0}</div>
+          <div className="card-label">Total SKUs</div>
+          <div className="card-value">{data.totalProducts}</div>
         </div>
         <div className="summary-card">
-          <div className="card-label">Total Stock Value</div>
-          <div className="card-value">Rs {data.totalValue?.toLocaleString() || 0}</div>
+          <div className="card-label">Inventory Value</div>
+          <div className="card-value">Rs {data.totalValue?.toLocaleString()}</div>
         </div>
         <div className="summary-card alert">
           <div className="card-label">Low Stock Items</div>
-          <div className="card-value">{data.lowStockCount || 0}</div>
+          <div className="card-value">{data.lowStockCount}</div>
         </div>
       </div>
 
       <div className="report-table">
         <h4>Low Stock Alert</h4>
-        <table>
-          <thead>
-            <tr>
-              <th>Product</th>
-              <th>Current Stock</th>
-              <th>Reorder Level</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.lowStockItems?.map((item, index) => (
-              <tr key={index}>
-                <td>{item.name}</td>
-                <td>{item.quantity}</td>
-                <td>{item.reorderLevel}</td>
-                <td><span className="status-badge critical">Low Stock</span></td>
+        <p style={{ fontSize: '0.9rem', color: '#64748b', marginBottom: '15px' }}>
+          List of products currently at or below their reorder level.
+        </p>
+        {Array.isArray(data.lowStockItems) && data.lowStockItems.length > 0 ? (
+          <table>
+            <thead>
+              <tr>
+                <th>Product</th>
+                <th>Current Stock</th>
+                <th>Reorder Level</th>
+                <th>Status</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {data.lowStockItems.map((item, index) => (
+                <tr key={index}>
+                  <td>{item.name}</td>
+                  <td>{item.quantity}</td>
+                  <td>{item.reorderLevel}</td>
+                  <td><span className="status-badge critical">Low Stock</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div style={{ textAlign: 'center', padding: '30px', color: '#64748b' }}>
+            ✅ Stock levels are healthy across all products.
+          </div>
+        )}
       </div>
+    </div>
     </div>
   );
 }

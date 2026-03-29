@@ -1,7 +1,7 @@
 import React from "react";
 import "./LandingPage.css";
 
-export default function LandingPage({ onSwitchToLogin, onSwitchToSignup }) {
+export default function LandingPage({ onSwitchToLogin, onSwitchToSignup, isLoggedIn, user, onGoToDashboard, onLogout }) {
   return (
     <div className="landing-page">
       {/* HEADER/NAVBAR */}
@@ -20,12 +20,30 @@ export default function LandingPage({ onSwitchToLogin, onSwitchToSignup }) {
               <a href="#contact">Contact</a>
             </nav>
             <div className="landing-nav-buttons">
-              <button className="landing-btn-secondary" onClick={onSwitchToLogin}>
-                Login
-              </button>
-              <button className="landing-btn-primary" onClick={onSwitchToSignup}>
-                Get Started
-              </button>
+              {isLoggedIn ? (
+                <>
+                  <span className="landing-user-welcome">
+                    Welcome, {user?.fullName && user.fullName !== 'youba' && user.fullName !== user.email 
+                      ? user.fullName 
+                      : user?.email?.split('@')[0] || 'User'}!
+                  </span>
+                  <button className="landing-btn-secondary" onClick={onLogout}>
+                    Logout
+                  </button>
+                  <button className="landing-btn-primary" onClick={onGoToDashboard}>
+                    Go to Dashboard
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button className="landing-btn-secondary" onClick={onSwitchToLogin}>
+                    Login
+                  </button>
+                  <button className="landing-btn-primary" onClick={onSwitchToSignup}>
+                    Get Started
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -50,21 +68,33 @@ export default function LandingPage({ onSwitchToLogin, onSwitchToSignup }) {
                 prevent expiry waste, and optimize operations with data-driven insights.
               </p>
               <div className="landing-hero-buttons">
-                <button className="landing-btn-hero-primary" onClick={onSwitchToSignup}>
-                  Create Account
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <line x1="5" y1="12" x2="19" y2="12"/>
-                    <polyline points="12,5 19,12 12,19"/>
-                  </svg>
-                </button>
-                <button className="landing-btn-hero-secondary" onClick={onSwitchToLogin}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
-                    <polyline points="10,17 15,12 10,7"/>
-                    <line x1="15" y1="12" x2="3" y2="12"/>
-                  </svg>
-                  Sign In
-                </button>
+                {isLoggedIn ? (
+                  <button className="landing-btn-hero-primary" onClick={onGoToDashboard}>
+                    Go to Dashboard
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <line x1="5" y1="12" x2="19" y2="12"/>
+                      <polyline points="12,5 19,12 12,19"/>
+                    </svg>
+                  </button>
+                ) : (
+                  <>
+                    <button className="landing-btn-hero-primary" onClick={onSwitchToSignup}>
+                      Create Account
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <line x1="5" y1="12" x2="19" y2="12"/>
+                        <polyline points="12,5 19,12 12,19"/>
+                      </svg>
+                    </button>
+                    <button className="landing-btn-hero-secondary" onClick={onSwitchToLogin}>
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+                        <polyline points="10,17 15,12 10,7"/>
+                        <line x1="15" y1="12" x2="3" y2="12"/>
+                      </svg>
+                      Sign In
+                    </button>
+                  </>
+                )}
               </div>
               <div className="landing-hero-stats">
                 <div className="landing-stat">
@@ -250,12 +280,20 @@ export default function LandingPage({ onSwitchToLogin, onSwitchToSignup }) {
               Join healthcare professionals using MediTrust for efficient pharmacy management
             </p>
             <div className="landing-cta-buttons">
-              <button className="landing-btn-cta-primary" onClick={onSwitchToSignup}>
-                Create Account
-              </button>
-              <button className="landing-btn-cta-secondary" onClick={onSwitchToLogin}>
-                Sign In
-              </button>
+              {isLoggedIn ? (
+                <button className="landing-btn-cta-primary" onClick={onGoToDashboard}>
+                  Go to Dashboard
+                </button>
+              ) : (
+                <>
+                  <button className="landing-btn-cta-primary" onClick={onSwitchToSignup}>
+                    Create Account
+                  </button>
+                  <button className="landing-btn-cta-secondary" onClick={onSwitchToLogin}>
+                    Sign In
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

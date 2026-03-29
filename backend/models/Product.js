@@ -13,7 +13,32 @@ const productSchema = new mongoose.Schema({
   category: {
     type: String,
     required: true,
-    enum: ['Antibiotic', 'Painkiller', 'Vitamin', 'Diabetes', 'Heart', 'Respiratory', 'Digestive', 'Other']
+    enum: [
+      'Antibiotic',
+      'Antibiotics',
+      'Painkiller',
+      'Painkillers', 
+      'Diabetes',
+      'Heart & Blood Pressure',
+      'Digestive',
+      'Respiratory',
+      'Vitamin',
+      'Vitamins',
+      'Antacid',
+      'Antacids',
+      'Antiseptic',
+      'Antiseptics',
+      'Cold & Flu',
+      'Mental Health',
+      'Thyroid',
+      'Eye & Ear Care',
+      'Contraceptives',
+      'Contraceptive',
+      'Skin Care',
+      'Allergy',
+      'Cardiovascular',
+      'Other'
+    ]
   },
   manufacturer: {
     type: String,
@@ -46,14 +71,28 @@ const productSchema = new mongoose.Schema({
     type: Number,
     default: 50
   },
+  lowStockAlertSent: {
+    type: Boolean,
+    default: false
+  },
   supplier: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Supplier'
   },
   status: {
     type: String,
-    enum: ['In Stock', 'Low Stock', 'Out of Stock', 'Expiring Soon'],
+    enum: ['In Stock', 'Low Stock', 'Out of Stock', 'Expiring Soon', 'Expired'],
     default: 'In Stock'
+  },
+  isPromoted: {
+    type: Boolean,
+    default: false
+  },
+  discountPercentage: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 100
   },
   createdAt: {
     type: Date,
@@ -70,7 +109,15 @@ productSchema.pre('save', function(next) {
   const today = new Date();
   const daysUntilExpiry = Math.floor((this.expiryDate - today) / (1000 * 60 * 60 * 24));
   
-  if (this.quantity === 0) {
+  // Automatically reset the Anti-Spam tracker if stock goes back to healthy levels
+  if (this.quantity > this.reorderLevel) {
+    this.lowStockAlertSent = false;
+  }
+  
+  // Status priority: Expired > Out of Stock > Low Stock > Expiring Soon > In Stock
+  if (daysUntilExpiry < 0) {
+    this.status = 'Expired';
+  } else if (this.quantity === 0) {
     this.status = 'Out of Stock';
   } else if (this.quantity <= this.reorderLevel) {
     this.status = 'Low Stock';

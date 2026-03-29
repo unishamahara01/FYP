@@ -62,6 +62,13 @@
 .landing-nav-buttons {
   display: flex;
   gap: 12px;
+  align-items: center;
+}
+
+.landing-user-welcome {
+  color: #0d3b66;
+  font-weight: 600;
+  margin-right: 8px;
 }
 
 .landing-btn-secondary {

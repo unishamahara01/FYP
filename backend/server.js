@@ -8,12 +8,17 @@ const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const session = require("express-session");
 const { OAuth2Client } = require("google-auth-library");
 const nodemailer = require("nodemailer");
+const { spawn } = require("child_process");
+const path = require("path");
 require("dotenv").config();
 
 // Import database connection and User model
 const connectDB = require("./config/database");
 const User = require("./models/User");
 const PasswordReset = require("./models/PasswordReset");
+
+// Import API routes
+const apiRoutes = require("./routes/index");
 
 const app = express();
 
@@ -25,10 +30,16 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // Middleware
 app.use(cors({
-  origin: ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"],
+  origin: ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3005", "http://localhost:3006"],
   credentials: true
 }));
 app.use(express.json());
+
+// Simple test route
+app.get("/api/simple-test", (req, res) => {
+  console.log("🧪 SIMPLE TEST ENDPOINT HIT");
+  res.json({ message: "Simple test working", timestamp: new Date().toISOString() });
+});
 app.use(session({
   secret: process.env.SESSION_SECRET || "your-session-secret",
   resave: false,
@@ -193,6 +204,9 @@ const authorizePermission = (...requiredPermissions) => {
 
 // Routes
 
+// Mount API routes
+app.use("/api", apiRoutes);
+
 // Health check
 app.get("/", (req, res) => {
   res.json({ message: "MediTrust Backend API is running", status: "healthy" });
@@ -223,10 +237,6 @@ app.post("/api/auth/register", [
       return res.status(400).json({ message: "User already exists with this email" });
     }
 
-    // Hash password
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
-
     // Set permissions based on role
     let permissions = [];
     if (role === "Admin") {
@@ -237,11 +247,11 @@ app.post("/api/auth/register", [
       permissions = ["view_inventory", "view_orders"];
     }
 
-    // Create new user
+    // Create new user (password will be hashed by User model pre-save middleware)
     const newUser = new User({
       fullName,
       email,
-      password: hashedPassword,
+      password, // Don't hash here - let the User model handle it
       role,
       permissions,
       authProvider: 'local'
@@ -289,7 +299,7 @@ app.post("/api/auth/login", [
     }
 
     // Check password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
+    const isPasswordValid = await user.comparePassword(password);
     if (!isPasswordValid) {
       return res.status(401).json({ message: "Invalid email or password" });
     }
@@ -326,6 +336,44 @@ app.post("/api/auth/login", [
 
   } catch (error) {
     console.error("Login error:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+// Signup endpoint
+app.post("/api/auth/signup", [
+  body("name").notEmpty().withMessage("Name is required"),
+  body("email").isEmail().withMessage("Please provide a valid email"),
+  body("password").isLength({ min: 6 }).withMessage("Password must be at least 6 characters"),
+  body("role").optional().isIn(['Admin', 'Pharmacist', 'Staff']).withMessage("Invalid role")
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { name, email, password, role } = req.body;
+    
+    // Check if user exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: 'User already exists' });
+    }
+    
+    // Create new user
+    const user = new User({ 
+      fullName: name,
+      email, 
+      password, 
+      role: role || 'Staff',
+      status: 'Active'
+    });
+    await user.save();
+    
+    res.status(201).json({ message: 'User created successfully' });
+  } catch (error) {
+    console.error("Signup error:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 });
@@ -555,14 +603,42 @@ app.post("/api/auth/reset-password", [
 });
 
 // Dashboard data endpoint (protected)
-app.get("/api/dashboard/stats", authenticateToken, (req, res) => {
-  // Mock dashboard data
-  const dashboardData = {
-    totalSKUs: 5230,
-    expiringItems: 124,
-    predictedShortages: 18,
-    todaysSales: 124500, // in NPR
-    salesForecast: [
+app.get("/api/dashboard/stats", authenticateToken, async (req, res) => {
+  try {
+    const Product = require('./models/Product');
+    const Order = require('./models/Order');
+
+    // 1. Total Products
+    const totalSKUs = await Product.countDocuments();
+
+    // 2. Expiring Items (within 90 days)
+    const ninetyDaysFromNow = new Date();
+    ninetyDaysFromNow.setDate(ninetyDaysFromNow.getDate() + 90);
+    const expiringItems = await Product.countDocuments({
+      expiryDate: { $lte: ninetyDaysFromNow, $gte: new Date() }
+    });
+
+    // 3. Low Stock Items (Quantity <= Reorder Level)
+    const predictedShortages = await Product.countDocuments({
+      $expr: { $lte: ['$quantity', '$reorderLevel'] }
+    });
+
+    // 4. Today's Sales
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todaysOrders = await Order.aggregate([
+      { $match: { createdAt: { $gte: today } } },
+      { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+    ]);
+    const todaysSales = todaysOrders.length > 0 ? todaysOrders[0].total : 0;
+
+    // Build real-time dashboard data
+    const dashboardData = {
+      totalSKUs: totalSKUs,
+      expiringItems: expiringItems,
+      predictedShortages: predictedShortages,
+      todaysSales: todaysSales, // in NPR
+      salesForecast: [
       { month: "Jan", actual: 95000, predicted: 98000 },
       { month: "Feb", actual: 102000, predicted: 105000 },
       { month: "Mar", actual: 118000, predicted: 115000 },
@@ -591,6 +667,62 @@ app.get("/api/dashboard/stats", authenticateToken, (req, res) => {
   };
 
   res.json(dashboardData);
+  } catch (error) {
+    console.error("Dashboard stats error:", error);
+    res.status(500).json({ error: "Failed to fetch dashboard stats" });
+  }
+});
+
+// ============================================
+// AI CHATBOT ROUTE (WITH OPENROUTER)
+// ============================================
+app.post("/api/chat", authenticateToken, async (req, res) => {
+  try {
+    const { message } = req.body;
+    
+    if (!process.env.OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY === 'paste_your_openrouter_api_key_here') {
+      return res.status(400).json({ error: "OpenRouter API Key not configured. Please add it to backend/.env file." });
+    }
+
+    // Dynamic import for node-fetch to support CommonJS
+    const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+
+    const systemPrompt = `You are MediBot, an AI pharmacy assistant for MediTrust. 
+Your role is to help pharmacists and admins manage inventory, answer customer queries, and provide business insights.
+Format your responses neatly. If presenting lists, use bullet points.
+Provide helpful, concise, and professional answers.`;
+
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "http://localhost:3000",
+        "X-Title": "MediTrust FYP"
+      },
+      body: JSON.stringify({
+        model: "openrouter/auto", // Good default free/cheap model
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: message }
+        ]
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("OpenRouter Error response:", errorText);
+      throw new Error(`OpenRouter API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const aiMessage = data.choices[0].message.content;
+
+    res.json({ response: aiMessage });
+  } catch (error) {
+    console.error("Chat API error:", error);
+    res.status(500).json({ error: "Failed to process chat query" });
+  }
 });
 
 // ============================================
@@ -889,6 +1021,13 @@ const Order = require("./models/Order");
 const Sale = require("./models/Sale");
 const Supplier = require("./models/Supplier");
 const Customer = require("./models/Customer");
+const Department = require("./models/Department");
+const Pharmacy = require("./models/Pharmacy");
+const PurchaseOrder = require("./models/PurchaseOrder");
+
+// Import low stock notification system
+const { checkLowStock, sendLowStockEmail } = require("./lowStockNotification");
+const { config: emailConfig, isValidEmail, getNotificationQuery } = require("./emailConfig");
 
 // GET Dashboard Stats
 app.get("/api/dashboard/stats", authenticateToken, async (req, res) => {
@@ -934,6 +1073,156 @@ app.get("/api/dashboard/stats", authenticateToken, async (req, res) => {
   } catch (error) {
     console.error("Error fetching dashboard stats:", error);
     res.status(500).json({ message: "Error fetching dashboard stats" });
+  }
+});
+
+// GET Low Stock Items
+app.get("/api/inventory/low-stock", authenticateToken, async (req, res) => {
+  try {
+    const LOW_STOCK_THRESHOLD = 50;
+    
+    const lowStockProducts = await Product.find({
+      quantity: { $lte: LOW_STOCK_THRESHOLD }
+    }).sort({ quantity: 1 });
+    
+    const outOfStock = lowStockProducts.filter(p => p.quantity === 0);
+    const lowStock = lowStockProducts.filter(p => p.quantity > 0);
+    
+    res.json({
+      success: true,
+      lowStockThreshold: LOW_STOCK_THRESHOLD,
+      totalLowStock: lowStockProducts.length,
+      outOfStock: outOfStock,
+      lowStock: lowStock,
+      summary: {
+        outOfStockCount: outOfStock.length,
+        lowStockCount: lowStock.length
+      }
+    });
+  } catch (error) {
+    console.error("Error fetching low stock items:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Error fetching low stock items" 
+    });
+  }
+});
+
+// POST Send Low Stock Email Notifications
+app.post("/api/inventory/send-low-stock-alert", authenticateToken, authorizeRole("Admin", "Pharmacist"), async (req, res) => {
+  try {
+    console.log("📧 Manual low stock alert triggered by:", req.user.email);
+    
+    const LOW_STOCK_THRESHOLD = 50;
+    
+    // Find products with low stock
+    const lowStockProducts = await Product.find({
+      quantity: { $lte: LOW_STOCK_THRESHOLD }
+    }).sort({ quantity: 1 });
+    
+    if (lowStockProducts.length === 0) {
+      return res.json({
+        success: true,
+        message: "No low stock items found. All products are well stocked!",
+        emailsSent: 0
+      });
+    }
+    
+    // Get admin users to notify (SMART FILTERING)
+    console.log(`📧 Email config: ${emailConfig.maxRecipients} max recipients, environment: ${process.env.NODE_ENV || 'development'}`);
+    
+    let adminUsers;
+    if (emailConfig.testEmail) {
+      // Development mode - use specific test email
+      adminUsers = await User.find({ 
+        email: emailConfig.testEmail,
+        role: { $in: ['Admin', 'Pharmacist'] }
+      });
+      console.log(`🧪 Development mode: Using test email ${emailConfig.testEmail}`);
+    } else {
+      // Production mode - use filtered real emails
+      adminUsers = await User.find(getNotificationQuery()).limit(emailConfig.maxRecipients);
+    }
+    
+    // Additional filtering for valid emails
+    adminUsers = adminUsers.filter(user => isValidEmail(user.email));
+    
+    if (adminUsers.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No admin users found to send notifications to."
+      });
+    }
+    
+    let emailsSent = 0;
+    const emailResults = [];
+    
+    // Send email notifications
+    for (const admin of adminUsers) {
+      try {
+        await sendLowStockEmail(admin.email, admin.fullName, lowStockProducts);
+        emailsSent++;
+        emailResults.push({
+          email: admin.email,
+          status: 'sent',
+          name: admin.fullName
+        });
+        console.log(`✅ Email sent to: ${admin.email}`);
+      } catch (emailError) {
+        console.error(`❌ Failed to send email to ${admin.email}:`, emailError.message);
+        emailResults.push({
+          email: admin.email,
+          status: 'failed',
+          error: emailError.message,
+          name: admin.fullName
+        });
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Low stock notifications processed. ${emailsSent}/${adminUsers.length} emails sent successfully.`,
+      emailsSent: emailsSent,
+      totalRecipients: adminUsers.length,
+      lowStockItems: lowStockProducts.length,
+      emailResults: emailResults,
+      lowStockSummary: {
+        outOfStock: lowStockProducts.filter(p => p.quantity === 0).length,
+        lowStock: lowStockProducts.filter(p => p.quantity > 0).length
+      }
+    });
+    
+  } catch (error) {
+    console.error("❌ Error sending low stock alerts:", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Error sending low stock notifications",
+      error: error.message
+    });
+  }
+});
+
+// POST Automated Low Stock Check (for scheduled tasks)
+app.post("/api/inventory/check-low-stock", authenticateToken, authorizeRole("Admin"), async (req, res) => {
+  try {
+    console.log("🔄 Automated low stock check triggered");
+    
+    // This endpoint can be called by a cron job or scheduler
+    await checkLowStock();
+    
+    res.json({
+      success: true,
+      message: "Automated low stock check completed successfully",
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error("❌ Error in automated low stock check:", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Error in automated low stock check",
+      error: error.message
+    });
   }
 });
 
@@ -1054,6 +1343,25 @@ app.get("/api/dashboard/recent-activity", authenticateToken, async (req, res) =>
   }
 });
 
+// GET Recent Sales (for Staff Dashboard Activity Feed)
+app.get("/api/sales", authenticateToken, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    
+    // Fetch recent sales/orders
+    const recentSales = await Sale.find()
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .populate('customer', 'fullName')
+      .lean();
+    
+    res.json(recentSales);
+  } catch (error) {
+    console.error('Error fetching recent sales:', error);
+    res.status(500).json({ message: 'Error fetching sales data' });
+  }
+});
+
 // GET Sales Forecast Data (last 6 months)
 app.get("/api/sales/forecast", authenticateToken, async (req, res) => {
   try {
@@ -1106,26 +1414,403 @@ app.get("/api/products", authenticateToken, async (req, res) => {
   }
 });
 
+// GET Single Product by ID
+app.get("/api/products/:id", authenticateToken, async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id).populate('supplier');
+    if (!product) {
+      return res.status(404).json({ message: 'Product not found' });
+    }
+    res.json(product);
+  } catch (error) {
+    console.error("Error fetching product:", error);
+    res.status(500).json({ message: "Error fetching product" });
+  }
+});
+
 // POST Create New Product
 app.post("/api/products", authenticateToken, async (req, res) => {
   try {
+    console.log("📦 Creating product:", req.body);
+    
+    // Validate required fields
+    const { name, category, manufacturer, quantity, price, expiryDate, manufactureDate } = req.body;
+    
+    if (!name || !category || !manufacturer || quantity === undefined || !price || !expiryDate || !manufactureDate) {
+      return res.status(400).json({ 
+        message: "Missing required fields", 
+        required: ["name", "category", "manufacturer", "quantity", "price", "expiryDate", "manufactureDate"]
+      });
+    }
+    
     const newProduct = new Product(req.body);
     await newProduct.save();
+    console.log("✅ Product created:", newProduct._id);
     res.status(201).json({ message: "Product created successfully", product: newProduct });
   } catch (error) {
-    console.error("Error creating product:", error);
+    console.error("❌ Error creating product:", error);
     res.status(500).json({ message: "Error creating product", error: error.message });
+  }
+});
+
+// PUT Update Product
+app.put("/api/products/:id", authenticateToken, async (req, res) => {
+  try {
+    const product = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    if (!product) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+    res.json({ message: "Product updated successfully", product });
+  } catch (error) {
+    console.error("Error updating product:", error);
+    res.status(500).json({ message: "Error updating product", error: error.message });
+  }
+});
+
+// ==================== PURCHASE ORDER ENDPOINTS ====================
+
+// GET All Purchase Orders
+app.get("/api/purchase-orders", authenticateToken, async (req, res) => {
+  try {
+    const pos = await PurchaseOrder.find().sort({ createdAt: -1 });
+    res.json(pos);
+  } catch (error) {
+    console.error("Error fetching POs:", error);
+    res.status(500).json({ message: "Error fetching purchase orders" });
+  }
+});
+
+// POST Create Purchase Order
+app.post("/api/purchase-orders", authenticateToken, async (req, res) => {
+  try {
+    const { productId, productName, suggestedOrderQty, estimatedCost } = req.body;
+    
+    // Generate PO Number
+    const poCount = await PurchaseOrder.countDocuments();
+    const poNumber = `PO-${Date.now()}-${poCount + 101}`;
+    
+    const newPO = new PurchaseOrder({
+      poNumber,
+      product: productId,
+      productName,
+      suggestedOrderQty,
+      estimatedCost,
+      processedBy: req.user.id
+    });
+    
+    await newPO.save();
+    res.status(201).json({ message: "Purchase order created", po: newPO });
+  } catch (error) {
+    console.error("Error creating PO:", error);
+    res.status(500).json({ message: "Error creating purchase order" });
+  }
+});
+
+// Simple test route
+app.get("/api/simple-test", (req, res) => {
+  console.log("🧪 SIMPLE TEST ENDPOINT HIT");
+  res.json({ message: "Simple test working", timestamp: new Date().toISOString() });
+});
+
+// PUT Fulfill Purchase Order (Mark as Received) - FIXED VERSION
+app.put("/api/purchase-orders/:id/fulfill", authenticateToken, async (req, res) => {
+  try {
+    console.log(`🔄 FULFILL REQUEST - PO ID: ${req.params.id}`);
+    console.log(`🔄 User: ${req.user?.email || 'Unknown'}`);
+    
+    // Find purchase order
+    const po = await PurchaseOrder.findById(req.params.id);
+    if (!po) {
+      console.error(`❌ Purchase order not found: ${req.params.id}`);
+      return res.status(404).json({ message: "Purchase order not found" });
+    }
+    
+    console.log(`✅ Found PO: ${po.poNumber}, Product: ${po.productName}, Status: ${po.status}`);
+    
+    if (po.status === 'Received') {
+      console.log(`⚠️ Order already received`);
+      return res.status(400).json({ message: "Order already received" });
+    }
+    
+    // Find product
+    console.log(`🔍 Looking for product: ${po.product}`);
+    const product = await Product.findById(po.product);
+    if (!product) {
+      console.error(`❌ Product not found: ${po.product}`);
+      return res.status(404).json({ message: "Product not found" });
+    }
+    
+    console.log(`✅ Found product: ${product.name}, Current quantity: ${product.quantity}`);
+    
+    // Update quantities safely
+    const oldQuantity = parseInt(product.quantity) || 0;
+    const addQuantity = parseInt(po.suggestedOrderQty) || 0;
+    const newQuantity = oldQuantity + addQuantity;
+    
+    console.log(`📊 Updating quantity: ${oldQuantity} + ${addQuantity} = ${newQuantity}`);
+    
+    product.quantity = newQuantity;
+    await product.save();
+    
+    // Update PO status
+    po.status = 'Received';
+    po.receivedAt = new Date();
+    await po.save();
+    
+    console.log(`✅ SUCCESS: ${po.productName} stock updated from ${oldQuantity} to ${newQuantity}`);
+    
+    res.json({ 
+      message: "Inventory restocked successfully", 
+      po: po,
+      product: {
+        _id: product._id,
+        name: product.name,
+        quantity: product.quantity
+      }
+    });
+    
+  } catch (error) {
+    console.error("❌ FULFILL ERROR:", error.message);
+    console.error("❌ Stack trace:", error.stack);
+    res.status(500).json({ 
+      message: "Error fulfilling purchase order", 
+      error: error.message
+    });
+  }
+});
+
+// Test endpoint to verify server is working
+app.get("/api/test-fulfill", (req, res) => {
+  console.log("🧪 TEST ENDPOINT HIT");
+  res.json({ message: "Test endpoint working" });
+});
+
+// GET Product by QR Code Data
+app.post("/api/products/qr-lookup", authenticateToken, async (req, res) => {
+  try {
+    console.log("🔍 QR Lookup request:", req.body);
+    
+    const { qrData } = req.body;
+    let product = null;
+    
+    if (!qrData) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'QR data is required',
+        qrData: qrData
+      });
+    }
+    
+    // Parse QR data
+    if (typeof qrData === 'string') {
+      try {
+        // Try to parse as JSON first
+        const parsedData = JSON.parse(qrData);
+        console.log("📦 Parsed QR data:", parsedData);
+        
+        if (parsedData.id) {
+          // First check if the ID is actually a batch number format
+          if (typeof parsedData.id === 'string' && !parsedData.id.match(/^[0-9a-fA-F]{24}$/)) {
+            // Looks like a batch number, not MongoDB ID
+            product = await Product.findOne({ batchNumber: parsedData.id }).populate('supplier');
+            console.log("🔍 Found product by parsed ID as batch number:", product ? product.name : 'Not found');
+          } else {
+            // Try as MongoDB ID
+            try {
+              product = await Product.findById(parsedData.id).populate('supplier');
+              console.log("🔍 Found product by parsed ID:", product ? product.name : 'Not found');
+            } catch (idError) {
+              console.log("❌ MongoDB ID search failed, trying as batch number:", idError.message);
+              // Fallback to batch number search
+              product = await Product.findOne({ batchNumber: parsedData.id }).populate('supplier');
+              console.log("🔍 Found product by parsed ID as batch number (fallback):", product ? product.name : 'Not found');
+            }
+          }
+        }
+      } catch (parseError) {
+        console.log("📝 QR data is not JSON, trying different search methods:", qrData);
+        
+        // Method 1: Try as MongoDB ObjectID
+        if (qrData.match(/^[0-9a-fA-F]{24}$/)) {
+          try {
+            product = await Product.findById(qrData).populate('supplier');
+            console.log("🔍 Found product by MongoDB ID:", product ? product.name : 'Not found');
+          } catch (idError) {
+            console.log("❌ MongoDB ID search failed:", idError.message);
+          }
+        }
+        
+        // Method 2: Try as batch number (NEW!)
+        if (!product) {
+          try {
+            product = await Product.findOne({ batchNumber: qrData }).populate('supplier');
+            console.log("🔍 Found product by batch number:", product ? product.name : 'Not found');
+          } catch (batchError) {
+            console.log("❌ Batch number search failed:", batchError.message);
+          }
+        }
+        
+        // Method 3: Try as product name
+        if (!product) {
+          try {
+            product = await Product.findOne({ name: { $regex: qrData, $options: 'i' } }).populate('supplier');
+            console.log("🔍 Found product by name search:", product ? product.name : 'Not found');
+          } catch (nameError) {
+            console.log("❌ Name search failed:", nameError.message);
+          }
+        }
+      }
+    } else if (qrData.productId) {
+      // Direct product ID
+      product = await Product.findById(qrData.productId).populate('supplier');
+      console.log("🔍 Found product by productId field:", product ? product.name : 'Not found');
+    } else if (qrData.id) {
+      // QR data object with ID
+      product = await Product.findById(qrData.id).populate('supplier');
+      console.log("🔍 Found product by id field:", product ? product.name : 'Not found');
+    } else if (qrData.batchNumber) {
+      // QR data object with batch number
+      product = await Product.findOne({ batchNumber: qrData.batchNumber }).populate('supplier');
+      console.log("🔍 Found product by batch number field:", product ? product.name : 'Not found');
+    }
+    
+    if (!product) {
+      console.log("❌ Product not found for QR data:", qrData);
+      return res.status(404).json({ 
+        success: false,
+        message: 'Product not found. Try using batch number (e.g., VIT-518940) or MongoDB ID.',
+        qrData: qrData,
+        searchedFor: typeof qrData === 'string' ? qrData : JSON.stringify(qrData),
+        hint: 'Use batch numbers like VIT-518940, PAR-943247, etc.'
+      });
+    }
+    
+    console.log("✅ Product found:", product.name, "- Batch:", product.batchNumber);
+    res.json({
+      success: true,
+      product: product,
+      message: `Product found: ${product.name} (Batch: ${product.batchNumber})`
+    });
+    
+  } catch (error) {
+    console.error("❌ Error in QR lookup:", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Error looking up product by QR code", 
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
+// POST Add Product to Inventory via QR
+app.post("/api/products/qr-add", authenticateToken, async (req, res) => {
+  try {
+    console.log("📦 QR Add to inventory request:", req.body);
+    
+    const { qrData, quantity = 1 } = req.body;
+    let product = null;
+    
+    // Parse QR data to find product (UPDATED to support batch numbers)
+    if (typeof qrData === 'string') {
+      try {
+        const parsedData = JSON.parse(qrData);
+        if (parsedData.id) {
+          // First check if the ID is actually a batch number format
+          if (typeof parsedData.id === 'string' && !parsedData.id.match(/^[0-9a-fA-F]{24}$/)) {
+            // Looks like a batch number, not MongoDB ID
+            product = await Product.findOne({ batchNumber: parsedData.id });
+            console.log("🔍 Found product by parsed ID as batch number for add:", product ? product.name : 'Not found');
+          } else {
+            // Try as MongoDB ID
+            try {
+              product = await Product.findById(parsedData.id);
+              console.log("🔍 Found product by parsed ID for add:", product ? product.name : 'Not found');
+            } catch (idError) {
+              console.log("❌ MongoDB ID search failed, trying as batch number:", idError.message);
+              // Fallback to batch number search
+              product = await Product.findOne({ batchNumber: parsedData.id });
+              console.log("🔍 Found product by parsed ID as batch number (fallback) for add:", product ? product.name : 'Not found');
+            }
+          }
+        } else if (parsedData.batchNumber) {
+          product = await Product.findOne({ batchNumber: parsedData.batchNumber });
+        }
+      } catch (parseError) {
+        console.log("📝 QR data is not JSON, trying different search methods:", qrData);
+        
+        // Method 1: Try as MongoDB ObjectID
+        if (qrData.match(/^[0-9a-fA-F]{24}$/)) {
+          try {
+            product = await Product.findById(qrData);
+            console.log("🔍 Found product by MongoDB ID for add:", product ? product.name : 'Not found');
+          } catch (idError) {
+            console.log("❌ MongoDB ID search failed:", idError.message);
+          }
+        }
+        
+        // Method 2: Try as batch number (NEW!)
+        if (!product) {
+          try {
+            product = await Product.findOne({ batchNumber: qrData });
+            console.log("🔍 Found product by batch number for add:", product ? product.name : 'Not found');
+          } catch (batchError) {
+            console.log("❌ Batch number search failed:", batchError.message);
+          }
+        }
+      }
+    } else if (qrData.productId) {
+      product = await Product.findById(qrData.productId);
+    } else if (qrData.id) {
+      product = await Product.findById(qrData.id);
+    } else if (qrData.batchNumber) {
+      product = await Product.findOne({ batchNumber: qrData.batchNumber });
+    }
+    
+    if (!product) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Product not found for QR code. Try using batch number (e.g., VIT-518940)',
+        qrData: qrData,
+        hint: 'Use batch numbers like VIT-518940, PAR-943247, etc.'
+      });
+    }
+    
+    // Update product quantity
+    const oldQuantity = product.quantity;
+    product.quantity += parseInt(quantity);
+    await product.save();
+    
+    console.log(`✅ Updated ${product.name} (Batch: ${product.batchNumber}): ${oldQuantity} → ${product.quantity}`);
+    
+    res.json({
+      success: true,
+      product: product,
+      message: `Added ${quantity} units of ${product.name} (Batch: ${product.batchNumber}). New stock: ${product.quantity}`,
+      oldQuantity: oldQuantity,
+      newQuantity: product.quantity,
+      addedQuantity: parseInt(quantity)
+    });
+    
+  } catch (error) {
+    console.error("❌ Error adding product via QR:", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Error adding product to inventory", 
+      error: error.message 
+    });
   }
 });
 
 // GET All Orders
 app.get("/api/orders", authenticateToken, async (req, res) => {
   try {
+    const limit = parseInt(req.query.limit) || 100;
     const orders = await Order.find()
       .populate('customer')
       .populate('processedBy', 'fullName')
       .sort({ createdAt: -1 })
-      .limit(100);
+      .limit(limit);
     res.json(orders);
   } catch (error) {
     console.error("Error fetching orders:", error);
@@ -1158,7 +1843,11 @@ app.post("/api/orders", authenticateToken, async (req, res) => {
         });
       }
       
-      const subtotal = product.price * item.quantity;
+      const priceToUse = product.isPromoted && product.discountPercentage > 0 
+        ? product.price * (1 - product.discountPercentage / 100) 
+        : product.price;
+
+      const subtotal = priceToUse * item.quantity;
       totalAmount += subtotal;
       
       orderItems.push({
@@ -1166,11 +1855,38 @@ app.post("/api/orders", authenticateToken, async (req, res) => {
         productName: product.name,
         quantity: item.quantity,
         price: product.price,
+        discountPercentage: product.isPromoted ? product.discountPercentage : 0,
+        appliedPrice: priceToUse,
         subtotal: subtotal
       });
       
       // Update product quantity
       product.quantity -= item.quantity;
+      
+      // ANTI-SPAM AUTOMATED EMAIL TRIGGER
+      if (product.quantity <= product.reorderLevel && !product.lowStockAlertSent) {
+        console.log(`🚨 Triggering automated low stock email for ${product.name}`);
+        product.lowStockAlertSent = true;
+        
+        // Find Admins to notify
+        try {
+          const { sendLowStockEmail } = require('./lowStockNotification');
+          // Important: We do a fresh look up for all Admins.
+          const adminUsers = await User.find({ role: { $in: ['Admin', 'Pharmacist'] } });
+          
+          // Fire emails asynchronously without blocking the order process
+          adminUsers.forEach(admin => {
+            if (admin.email) {
+              sendLowStockEmail(admin.email, admin.fullName, [product]).catch(err => {
+                console.error(`Failed to send background email to ${admin.email}:`, err.message);
+              });
+            }
+          });
+        } catch (emailErr) {
+          console.error("Error setting up automated low stock email:", emailErr);
+        }
+      }
+      
       await product.save();
     }
     
@@ -1363,29 +2079,44 @@ app.get("/api/sales/monthly", authenticateToken, async (req, res) => {
 // Sales Report
 app.get("/api/reports/sales", authenticateToken, async (req, res) => {
   try {
-    const { range } = req.query;
-    const now = new Date();
-    let startDate;
+    const { range, start, end } = req.query;
+    let startDate, endDate;
 
-    switch(range) {
-      case 'today':
-        startDate = new Date(now.setHours(0, 0, 0, 0));
-        break;
-      case 'week':
-        startDate = new Date(now.setDate(now.getDate() - 7));
-        break;
-      case 'month':
-        startDate = new Date(now.setMonth(now.getMonth() - 1));
-        break;
-      case 'year':
-        startDate = new Date(now.setFullYear(now.getFullYear() - 1));
-        break;
-      default:
-        startDate = new Date(now.setMonth(now.getMonth() - 1));
+    if (start && end) {
+      startDate = new Date(start);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(end);
+      endDate.setHours(23, 59, 59, 999);
+    } else {
+      const now = new Date();
+      endDate = new Date();
+      switch(range) {
+        case 'today':
+          startDate = new Date(now.setHours(0, 0, 0, 0));
+          break;
+        case 'yesterday':
+          startDate = new Date(now);
+          startDate.setDate(startDate.getDate() - 1);
+          startDate.setHours(0, 0, 0, 0);
+          endDate = new Date(startDate);
+          endDate.setHours(23, 59, 59, 999);
+          break;
+        case 'week':
+          startDate = new Date(now.setDate(now.getDate() - 7));
+          break;
+        case 'month':
+          startDate = new Date(now.setMonth(now.getMonth() - 1));
+          break;
+        case 'year':
+          startDate = new Date(now.setFullYear(now.getFullYear() - 1));
+          break;
+        default:
+          startDate = new Date(now.setMonth(now.getMonth() - 1));
+      }
     }
 
-    const sales = await Sale.find({ date: { $gte: startDate } });
-    const orders = await Order.find({ createdAt: { $gte: startDate } });
+    const sales = await Sale.find({ date: { $gte: startDate, $lte: endDate } });
+    const orders = await Order.find({ createdAt: { $gte: startDate, $lte: endDate } });
 
     const totalSales = sales.reduce((sum, sale) => sum + sale.amount, 0);
     const totalOrders = orders.length;
@@ -1419,20 +2150,54 @@ app.get("/api/reports/sales", authenticateToken, async (req, res) => {
   }
 });
 
-// Inventory Report
+// Inventory Report (Enhanced with AI Synergy)
 app.get("/api/reports/inventory", authenticateToken, async (req, res) => {
   try {
     const products = await Product.find();
+    const currentMonth = new Date().getMonth();
+    const now = new Date();
+    const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
     
     const totalProducts = products.length;
     const totalValue = products.reduce((sum, p) => sum + (p.price * p.quantity), 0);
     const lowStockItems = products.filter(p => p.quantity <= p.reorderLevel);
-    const lowStockCount = lowStockItems.length;
+    
+    // Generate AI Reorder Suggestions using the same Smart Logic
+    const aiSuggestions = [];
+    products.forEach(product => {
+      let seasonalMultiplier = 1.0;
+      if (product.category === 'Respiratory' || product.category === 'Antibiotic') {
+        if (currentMonth >= 10 || currentMonth <= 1) seasonalMultiplier = 1.8;
+      } else if (product.category === 'Allergy') {
+        if (currentMonth >= 2 && currentMonth <= 5) seasonalMultiplier = 2.0;
+      }
+
+      const predictedMonthlyDemand = Math.round((Math.floor(product.quantity * 0.1) + 5) * 30 * seasonalMultiplier);
+      const reorderPoint = Math.round((predictedMonthlyDemand / 30) * 5) + Math.round(predictedMonthlyDemand * 0.2);
+      const isExpiringSoon = product.expiryDate && new Date(product.expiryDate) <= thirtyDaysFromNow;
+      
+      let reason = 'Low Stock';
+      let shouldReorder = product.quantity <= reorderPoint;
+
+      if (seasonalMultiplier > 1.2 && product.quantity <= reorderPoint * 1.5) {
+        shouldReorder = true;
+        reason = `High Seasonal Demand Predicted (${product.category})`;
+      }
+      if (shouldReorder) {
+        aiSuggestions.push({
+          productName: product.name,
+          currentStock: product.quantity,
+          suggestedOrderQty: Math.max(Math.ceil((predictedMonthlyDemand - product.quantity) / 10) * 10, 20),
+          reason: isExpiringSoon ? 'Current Stock Expiring Soon' : (seasonalMultiplier > 1.2 ? `High Seasonal Demand (${product.category})` : 'Low Stock'),
+          urgency: product.quantity === 0 ? 'Critical' : (isExpiringSoon || product.quantity <= 10 ? 'High' : 'Medium')
+        });
+      }
+    });
 
     res.json({
       totalProducts,
       totalValue: Math.round(totalValue),
-      lowStockCount,
+      lowStockCount: lowStockItems.length,
       lowStockItems: lowStockItems.map(p => ({
         name: p.name,
         quantity: p.quantity,
@@ -1483,24 +2248,79 @@ app.get("/api/reports/expiry", authenticateToken, async (req, res) => {
 // Customer Report
 app.get("/api/reports/customer", authenticateToken, async (req, res) => {
   try {
-    const customers = await Customer.find();
-    
-    const totalCustomers = customers.length;
-    const activeCustomers = customers.filter(c => c.lastVisit).length;
-    
-    const topCustomers = customers
-      .filter(c => c.totalPurchases > 0)
+    const { range, start, end } = req.query;
+    let startDate = new Date();
+    let endDate = new Date();
+    const now = new Date();
+
+    if (range === 'custom' && start && end) {
+      startDate = new Date(start);
+      endDate = new Date(end);
+      endDate.setHours(23, 59, 59, 999);
+    } else {
+      switch (range) {
+        case 'today':
+          startDate.setHours(0, 0, 0, 0);
+          endDate.setHours(23, 59, 59, 999);
+          break;
+        case 'yesterday':
+          startDate = new Date(now.setDate(now.getDate() - 1));
+          startDate.setHours(0, 0, 0, 0);
+          endDate = new Date(startDate);
+          endDate.setHours(23, 59, 59, 999);
+          break;
+        case 'week':
+          startDate = new Date(now.setDate(now.getDate() - 7));
+          break;
+        case 'month':
+          startDate = new Date(now.setMonth(now.getMonth() - 1));
+          break;
+        case 'year':
+          startDate = new Date(now.setFullYear(now.getFullYear() - 1));
+          break;
+        default:
+          startDate = new Date(now.setMonth(now.getMonth() - 1));
+      }
+    }
+
+    // Find orders in this period with customer IDs
+    const orders = await Order.find({
+      createdAt: { $gte: startDate, $lte: endDate },
+      customer: { $exists: true, $ne: null }
+    }).populate('customer');
+
+    // Global counts if needed (optional, but keep consistent)
+    const allCustomersCount = await Customer.countDocuments();
+
+    // Aggregate data per customer
+    const customerStats = {};
+    orders.forEach(order => {
+      // Handle cases where customer document might have been deleted but order remains
+      if (!order.customer) return;
+
+      const customerId = order.customer._id.toString();
+      if (!customerStats[customerId]) {
+        customerStats[customerId] = {
+          fullName: order.customer.fullName,
+          totalPurchases: 0,
+          lastVisit: order.createdAt
+        };
+      }
+      customerStats[customerId].totalPurchases += order.totalAmount;
+      if (order.createdAt > customerStats[customerId].lastVisit) {
+        customerStats[customerId].lastVisit = order.createdAt;
+      }
+    });
+
+    const topCustomers = Object.values(customerStats)
       .sort((a, b) => b.totalPurchases - a.totalPurchases)
-      .slice(0, 10)
-      .map(c => ({
-        fullName: c.fullName,
-        totalPurchases: c.totalPurchases,
-        lastVisit: c.lastVisit
-      }));
+      .slice(0, 10);
+
+    const activeInPeriod = Object.keys(customerStats).length;
 
     res.json({
-      totalCustomers,
-      activeCustomers,
+      totalCustomers: allCustomersCount, // Global database count
+      activeCustomers: activeInPeriod,   // Active in the selected timeframe
       topCustomers
     });
   } catch (error) {
@@ -1509,7 +2329,296 @@ app.get("/api/reports/customer", authenticateToken, async (req, res) => {
   }
 });
 
-// ==================== AI EXPIRY PREDICTION ====================
+// ==================== DEPARTMENT MANAGEMENT ENDPOINTS ====================
+
+// GET All Departments
+app.get("/api/admin/departments", authenticateToken, authorizeRole("Admin"), async (req, res) => {
+  try {
+    const departments = await Department.find()
+      .populate('manager', 'fullName email')
+      .populate('employees', 'fullName email role')
+      .populate('pharmacies', 'name code address.city status')
+      .sort({ createdAt: -1 });
+    
+    res.json({
+      message: "Departments retrieved successfully",
+      departments,
+      total: departments.length
+    });
+  } catch (error) {
+    console.error("Error fetching departments:", error);
+    res.status(500).json({ message: "Error fetching departments" });
+  }
+});
+
+// POST Create Department
+app.post("/api/admin/departments", authenticateToken, authorizeRole("Admin"), async (req, res) => {
+  try {
+    const { name, description, manager, budget } = req.body;
+    
+    // Check if department name already exists
+    const existingDept = await Department.findOne({ name });
+    if (existingDept) {
+      return res.status(400).json({ message: "Department name already exists" });
+    }
+    
+    const newDepartment = new Department({
+      name,
+      description,
+      manager,
+      budget,
+      createdBy: req.user.id
+    });
+    
+    await newDepartment.save();
+    
+    const populatedDept = await Department.findById(newDepartment._id)
+      .populate('manager', 'fullName email')
+      .populate('createdBy', 'fullName');
+    
+    res.status(201).json({
+      message: "Department created successfully",
+      department: populatedDept
+    });
+  } catch (error) {
+    console.error("Error creating department:", error);
+    res.status(500).json({ message: "Error creating department" });
+  }
+});
+
+// PUT Update Department
+app.put("/api/admin/departments/:id", authenticateToken, authorizeRole("Admin"), async (req, res) => {
+  try {
+    const { name, description, manager, budget, status } = req.body;
+    
+    const department = await Department.findByIdAndUpdate(
+      req.params.id,
+      { name, description, manager, budget, status },
+      { new: true }
+    ).populate('manager', 'fullName email');
+    
+    if (!department) {
+      return res.status(404).json({ message: "Department not found" });
+    }
+    
+    res.json({
+      message: "Department updated successfully",
+      department
+    });
+  } catch (error) {
+    console.error("Error updating department:", error);
+    res.status(500).json({ message: "Error updating department" });
+  }
+});
+
+// DELETE Department
+app.delete("/api/admin/departments/:id", authenticateToken, authorizeRole("Admin"), async (req, res) => {
+  try {
+    // Check if department has pharmacies
+    const pharmacyCount = await Pharmacy.countDocuments({ department: req.params.id });
+    if (pharmacyCount > 0) {
+      return res.status(400).json({ 
+        message: `Cannot delete department. It has ${pharmacyCount} pharmacy(ies) assigned.` 
+      });
+    }
+    
+    const department = await Department.findByIdAndDelete(req.params.id);
+    if (!department) {
+      return res.status(404).json({ message: "Department not found" });
+    }
+    
+    res.json({ message: "Department deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting department:", error);
+    res.status(500).json({ message: "Error deleting department" });
+  }
+});
+
+// ==================== PHARMACY MANAGEMENT ENDPOINTS ====================
+
+// GET All Pharmacies
+app.get("/api/admin/pharmacies", authenticateToken, authorizeRole("Admin"), async (req, res) => {
+  try {
+    const pharmacies = await Pharmacy.find()
+      .populate('manager', 'fullName email')
+      .populate('department', 'name')
+      .populate('staff.user', 'fullName email')
+      .sort({ createdAt: -1 });
+    
+    res.json({
+      message: "Pharmacies retrieved successfully",
+      pharmacies,
+      total: pharmacies.length
+    });
+  } catch (error) {
+    console.error("Error fetching pharmacies:", error);
+    res.status(500).json({ message: "Error fetching pharmacies" });
+  }
+});
+
+// POST Create Pharmacy
+app.post("/api/admin/pharmacies", authenticateToken, authorizeRole("Admin"), async (req, res) => {
+  try {
+    const pharmacyData = {
+      ...req.body,
+      createdBy: req.user.id
+    };
+    
+    // Check if pharmacy code already exists
+    const existingPharmacy = await Pharmacy.findOne({ code: pharmacyData.code });
+    if (existingPharmacy) {
+      return res.status(400).json({ message: "Pharmacy code already exists" });
+    }
+    
+    const newPharmacy = new Pharmacy(pharmacyData);
+    await newPharmacy.save();
+    
+    // Update department to include this pharmacy
+    if (pharmacyData.department) {
+      await Department.findByIdAndUpdate(
+        pharmacyData.department,
+        { $push: { pharmacies: newPharmacy._id } }
+      );
+    }
+    
+    const populatedPharmacy = await Pharmacy.findById(newPharmacy._id)
+      .populate('manager', 'fullName email')
+      .populate('department', 'name')
+      .populate('createdBy', 'fullName');
+    
+    res.status(201).json({
+      message: "Pharmacy created successfully",
+      pharmacy: populatedPharmacy
+    });
+  } catch (error) {
+    console.error("Error creating pharmacy:", error);
+    // Send specific error message
+    const errorMessage = error.message || "Error creating pharmacy";
+    res.status(500).json({ 
+      message: errorMessage,
+      details: error.errors ? Object.keys(error.errors).map(key => error.errors[key].message) : []
+    });
+  }
+});
+
+// PUT Update Pharmacy
+app.put("/api/admin/pharmacies/:id", authenticateToken, authorizeRole("Admin"), async (req, res) => {
+  try {
+    const pharmacy = await Pharmacy.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true }
+    ).populate('manager', 'fullName email')
+     .populate('department', 'name');
+    
+    if (!pharmacy) {
+      return res.status(404).json({ message: "Pharmacy not found" });
+    }
+    
+    res.json({
+      message: "Pharmacy updated successfully",
+      pharmacy
+    });
+  } catch (error) {
+    console.error("Error updating pharmacy:", error);
+    res.status(500).json({ message: "Error updating pharmacy" });
+  }
+});
+
+// DELETE Pharmacy
+app.delete("/api/admin/pharmacies/:id", authenticateToken, authorizeRole("Admin"), async (req, res) => {
+  try {
+    const pharmacy = await Pharmacy.findByIdAndDelete(req.params.id);
+    if (!pharmacy) {
+      return res.status(404).json({ message: "Pharmacy not found" });
+    }
+    
+    // Remove pharmacy from department
+    await Department.findByIdAndUpdate(
+      pharmacy.department,
+      { $pull: { pharmacies: req.params.id } }
+    );
+    
+    res.json({ message: "Pharmacy deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting pharmacy:", error);
+    res.status(500).json({ message: "Error deleting pharmacy" });
+  }
+});
+
+// GET Pharmacy Statistics
+app.get("/api/admin/pharmacy-stats", authenticateToken, authorizeRole("Admin"), async (req, res) => {
+  try {
+    const totalPharmacies = await Pharmacy.countDocuments();
+    const activePharmacies = await Pharmacy.countDocuments({ status: 'Active' });
+    const totalDepartments = await Department.countDocuments();
+    const activeDepartments = await Department.countDocuments({ status: 'Active' });
+    
+    // Get pharmacy distribution by department
+    const pharmacyByDept = await Pharmacy.aggregate([
+      {
+        $group: {
+          _id: '$department',
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $lookup: {
+          from: 'departments',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'department'
+        }
+      },
+      {
+        $unwind: '$department'
+      },
+      {
+        $project: {
+          departmentName: '$department.name',
+          pharmacyCount: '$count'
+        }
+      }
+    ]);
+    
+    res.json({
+      totalPharmacies,
+      activePharmacies,
+      totalDepartments,
+      activeDepartments,
+      pharmacyByDepartment: pharmacyByDept
+    });
+  } catch (error) {
+    console.error("Error fetching pharmacy stats:", error);
+    res.status(500).json({ message: "Error fetching statistics" });
+  }
+});
+
+// POST Apply/Toggle Promotion
+app.post("/api/inventory/apply-promotion", authenticateToken, authorizeRole("Admin", "Pharmacist"), async (req, res) => {
+  try {
+    const { productId, discountPercentage, isPromoted } = req.body;
+    
+    const product = await Product.findById(productId);
+    if (!product) {
+      return res.status(404).json({ success: false, message: "Product not found" });
+    }
+    
+    product.isPromoted = isPromoted !== undefined ? isPromoted : true;
+    product.discountPercentage = discountPercentage !== undefined ? discountPercentage : 20;
+    
+    await product.save();
+    
+    res.json({ 
+      success: true,
+      message: product.isPromoted ? "Promotion applied successfully" : "Promotion removed", 
+      product 
+    });
+  } catch (error) {
+    console.error("Error applying promotion:", error);
+    res.status(500).json({ success: false, message: "Error applying promotion" });
+  }
+});
 
 // AI Expiry Prediction Endpoint (ML-Powered)
 app.get("/api/ai/expiry-prediction", authenticateToken, async (req, res) => {
@@ -1517,14 +2626,18 @@ app.get("/api/ai/expiry-prediction", authenticateToken, async (req, res) => {
   try {
     // Try to use ML backend first
     try {
-      const mlResponse = await fetch('http://localhost:5001/predict');
+      const mlResponse = await fetch('http://localhost:5001/predict-expiry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ products })
+      });
       if (mlResponse.ok) {
         const mlData = await mlResponse.json();
-        console.log("✅ Using ML predictions from Python backend");
+        console.log("✅ Using real ML predictions from Python backend");
         return res.json(mlData);
       }
     } catch (mlError) {
-      console.log("⚠️ ML backend not available, using fallback algorithm");
+      console.log("⚠️ Python ML backend not available, using fallback algorithm");
     }
     
     // Fallback to rule-based if ML backend is not available
@@ -1610,6 +2723,13 @@ app.get("/api/ai/expiry-prediction", authenticateToken, async (req, res) => {
         recommendation = 'Stock level optimal, continue monitoring';
       }
       
+      // Automatic Promotion Logic DISABLED - Promotions must be manually applied
+      // if (riskScore >= 70 && !product.isPromoted && daysUntilExpiry > 0) {
+      //   product.isPromoted = true;
+      //   product.discountPercentage = product.discountPercentage || 20;
+      //   product.save().catch(err => console.error("Error auto-applying promotion:", err));
+      // }
+      
       return {
         productId: product._id,
         productName: product.name,
@@ -1622,13 +2742,15 @@ app.get("/api/ai/expiry-prediction", authenticateToken, async (req, res) => {
         riskLevel,
         urgency,
         recommendation,
+        isPromoted: product.isPromoted || false,
+        discountPercentage: product.discountPercentage || 0,
         aiConfidence: Math.min(95, 75 + (riskScore / 5)) // Simulated confidence score
       };
     });
     
-    // Filter and sort by risk
+    // Filter and sort by risk - INCLUDE EXPIRED PRODUCTS
     const criticalPredictions = predictions
-      .filter(p => p.daysUntilExpiry <= 90)
+      .filter(p => p.daysUntilExpiry <= 90 || p.daysUntilExpiry < 0)
       .sort((a, b) => b.riskScore - a.riskScore);
     
     // Summary statistics
@@ -1650,10 +2772,192 @@ app.get("/api/ai/expiry-prediction", authenticateToken, async (req, res) => {
   }
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ message: "Something went wrong!" });
+// AI Demand Prediction Endpoint
+app.get("/api/ai/demand-prediction", authenticateToken, async (req, res) => {
+  console.log("📈 AI Demand Prediction endpoint called");
+  try {
+    const products = await Product.find({}, 'name genericName category price quantity batchNumber');
+    
+    // Try to use Python ML backend first
+    try {
+      const mlResponse = await fetch('http://localhost:5001/predict-demand', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ products })
+      });
+      if (mlResponse.ok) {
+        const mlData = await mlResponse.json();
+        console.log("✅ Using real ML predictions from Python backend");
+        return res.json(mlData);
+      }
+    } catch (mlError) {
+      console.log("⚠️ Python ML backend not available, using fallback algorithm");
+    }
+
+    const currentMonth = new Date().getMonth(); // 0-11
+    
+    // Fallback Mock AI Logic: Base demand on category and seasonal trends
+    const predictions = products.map(product => {
+      // Base historical daily demand algorithm (ideally from Sales data, here using stock velocity)
+      const baseDemand = Math.floor(product.quantity * 0.1) + Math.floor(Math.random() * 10) + 1;
+      
+      let seasonalMultiplier = 1.0;
+      let trend = 'Stable';
+      let confidence = 85;
+
+      // Seasonal logics
+      if (product.category === 'Respiratory' || product.category === 'Antibiotic') {
+        if (currentMonth >= 10 || currentMonth <= 1) { // Winter (Nov-Feb)
+            seasonalMultiplier = 1.8;
+            trend = 'Increasing (Winter Peak)';
+            confidence = 92;
+        } else {
+            seasonalMultiplier = 0.6;
+            trend = 'Decreasing (Off-season)';
+        }
+      } else if (product.category === 'Vitamin' || product.category === 'Immunity') {
+        if (currentMonth >= 8 && currentMonth <= 11) { // Pre-winter
+            seasonalMultiplier = 1.5;
+            trend = 'Increasing (Flu Season Prep)';
+        }
+      } else if (product.category === 'Allergy') {
+        if (currentMonth >= 2 && currentMonth <= 5) { // Spring
+            seasonalMultiplier = 2.0;
+            trend = 'High (Spring Allergy Season)';
+            confidence = 95;
+        }
+      }
+
+      const predictedMonthlyDemand = Math.round(baseDemand * 30 * seasonalMultiplier);
+      const stockoutInDays = predictedMonthlyDemand > 0 ? Math.floor((product.quantity / predictedMonthlyDemand) * 30) : 999;
+      
+      return {
+        productId: product._id,
+        productName: product.name,
+        category: product.category,
+        currentStock: product.quantity,
+        predictedMonthlyDemand,
+        trend,
+        stockoutInDays,
+        confidenceScore: confidence
+      };
+    });
+
+    predictions.sort((a, b) => b.predictedMonthlyDemand - a.predictedMonthlyDemand);
+
+    res.json({
+      totalAnalyzed: products.length,
+      topDemanded: predictions.slice(0, 10),
+      allPredictions: predictions
+    });
+  } catch (error) {
+    console.error("Error in AI demand prediction:", error);
+    res.status(500).json({ message: "Error generating demand predictions" });
+  }
+});
+
+// AI Reorder Suggestions Endpoint
+app.get("/api/ai/reorder-suggestions", authenticateToken, async (req, res) => {
+  console.log("🛒 AI Reorder Suggestions endpoint called");
+  try {
+    const products = await Product.find({}, 'name category quantity price supplierId');
+    
+    // Try to use Python ML backend first
+    try {
+      const mlResponse = await fetch('http://localhost:5001/predict-reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ products })
+      });
+      if (mlResponse.ok) {
+        const mlData = await mlResponse.json();
+        console.log("✅ Using real ML predictions from Python backend");
+        return res.json(mlData);
+      }
+    } catch (mlError) {
+      console.log("⚠️ Python ML backend not available, using fallback algorithm");
+    }
+
+    const suggestions = [];
+    const currentMonth = new Date().getMonth();
+    const now = new Date();
+    const thirtyDaysFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+    products.forEach(product => {
+      // 1. Calculate Seasonal Demand Multiplier
+      let seasonalMultiplier = 1.0;
+      if (product.category === 'Respiratory' || product.category === 'Antibiotic') {
+        if (currentMonth >= 10 || currentMonth <= 1) seasonalMultiplier = 1.8;
+      } else if (product.category === 'Allergy') {
+        if (currentMonth >= 2 && currentMonth <= 5) seasonalMultiplier = 2.0;
+      }
+
+      // 2. Calculate Predicted Demand
+      const baseDemand = Math.floor(product.quantity * 0.1) + 5; 
+      const predictedMonthlyDemand = Math.round(baseDemand * 30 * seasonalMultiplier);
+      const leadTimeDays = 5;
+      const safetyStock = Math.round(predictedMonthlyDemand * 0.2);
+      const reorderPoint = Math.round((predictedMonthlyDemand / 30) * leadTimeDays) + safetyStock;
+
+      // 3. Check for Expiry Risk (effectively reduces available stock)
+      // Note: In a real app, we'd query batches, here we simulate based on product data if available
+      const isExpiringSoon = product.expiryDate && new Date(product.expiryDate) <= thirtyDaysFromNow;
+      
+      let reason = 'Low Stock';
+      let shouldReorder = product.quantity <= reorderPoint;
+
+      if (seasonalMultiplier > 1.2 && product.quantity <= reorderPoint * 1.5) {
+        shouldReorder = true;
+        reason = `High Seasonal Demand Predicted (${product.category})`;
+      }
+
+      if (isExpiringSoon && product.quantity > 0) {
+        shouldReorder = true;
+        reason = 'Current Stock Expiring Soon (Fresh Batch Needed)';
+      }
+
+      if (shouldReorder) {
+        let suggestedOrderQty = Math.max(predictedMonthlyDemand - product.quantity + safetyStock, 20);
+        suggestedOrderQty = Math.ceil(suggestedOrderQty / 10) * 10;
+        
+        const estCost = suggestedOrderQty * product.price;
+        let urgency = 'Medium';
+        if (product.quantity <= 10 || isExpiringSoon) urgency = 'High';
+        if (product.quantity === 0) urgency = 'Critical';
+
+        suggestions.push({
+          productId: product._id,
+          productName: product.name,
+          category: product.category,
+          currentStock: product.quantity,
+          reorderPoint,
+          suggestedOrderQty,
+          estimatedCost: Math.round(estCost),
+          urgency,
+          reason,
+          recommendedOrderDate: urgency === 'Critical' ? 'Immediately' : 'Within 2-3 Days'
+        });
+      }
+    });
+
+    const urgencyWeight = { 'Critical': 3, 'High': 2, 'Medium': 1, 'Low': 0 };
+    suggestions.sort((a, b) => urgencyWeight[b.urgency] - urgencyWeight[a.urgency]);
+
+    res.json({
+      itemsToReorder: suggestions.length,
+      totalEstimatedCost: suggestions.reduce((sum, item) => sum + item.estimatedCost, 0),
+      suggestions
+    });
+  } catch (error) {
+    console.error("Error in AI reorder suggestions:", error);
+    res.status(500).json({ message: "Error generating reorder suggestions" });
+  }
+});
+
+// Test endpoint to verify server is working
+app.get("/api/test-fulfill", (req, res) => {
+  console.log("🧪 TEST ENDPOINT HIT");
+  res.json({ message: "Test endpoint working" });
 });
 
 // 404 handler
@@ -1662,9 +2966,64 @@ app.use((req, res) => {
 });
 
 const PORT = process.env.PORT || 3001;
+
+// Start AI Backend automatically
+let aiProcess = null;
+
+function startAIBackend() {
+  console.log("🤖 Starting AI Backend...");
+  
+  const aiPath = path.join(__dirname, "..", "ai");
+  
+  // Check if Python is available
+  aiProcess = spawn("python", ["app.py"], {
+    cwd: aiPath,
+    stdio: "inherit",
+    shell: true
+  });
+  
+  aiProcess.on("error", (err) => {
+    console.log("⚠️  AI Backend failed to start:", err.message);
+    console.log("   AI features will not be available");
+    console.log("   To enable AI: cd ai && pip install -r requirements.txt && python app.py");
+  });
+  
+  aiProcess.on("exit", (code) => {
+    if (code !== 0 && code !== null) {
+      console.log(`⚠️  AI Backend exited with code ${code}`);
+    }
+  });
+  
+  console.log("✅ AI Backend starting on http://localhost:5001");
+}
+
+// Graceful shutdown
+process.on("SIGINT", () => {
+  console.log("\n🛑 Shutting down servers...");
+  if (aiProcess) {
+    aiProcess.kill();
+  }
+  process.exit(0);
+});
+
+process.on("SIGTERM", () => {
+  if (aiProcess) {
+    aiProcess.kill();
+  }
+  process.exit(0);
+});
+
 app.listen(PORT, () => {
-  console.log(`MediTrust Backend Server running on port ${PORT}`);
-  console.log(`Health check: http://localhost:${PORT}`);
-  console.log(`API Base URL: http://localhost:${PORT}/api`);
-  console.log(`✅ AI Expiry Prediction route registered at /api/ai/expiry-prediction`);
+  console.log("=".repeat(50));
+  console.log(`🚀 MediTrust Backend Server running on port ${PORT}`);
+  console.log(`   Health check: http://localhost:${PORT}`);
+  console.log(`   API Base URL: http://localhost:${PORT}/api`);
+  console.log("=".repeat(50));
+  
+  // Start AI Backend
+  startAIBackend();
+  
+  console.log("=".repeat(50));
+  console.log("✅ All services started!");
+  console.log("=".repeat(50));
 });

@@ -40,7 +40,7 @@ const orderSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['Cash', 'Card', 'Insurance', 'Online'],
+    enum: ['Cash', 'Card', 'QR Payment', 'Online'],
     default: 'Cash'
   },
   status: {

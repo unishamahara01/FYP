@@ -1,151 +1,254 @@
-const API_BASE_URL = 'http://localhost:3001/api';
+// API Configuration
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
+const AI_BASE_URL = process.env.REACT_APP_AI_URL || 'http://localhost:5001';
 
-// Helper function to get auth token from localStorage
+// Get auth token
 const getAuthToken = () => {
-  return localStorage.getItem('authToken');
+  return localStorage.getItem('token') || localStorage.getItem('authToken');
 };
 
-// Helper function to set auth token in localStorage
-const setAuthToken = (token) => {
-  localStorage.setItem('authToken', token);
-};
-
-// Helper function to remove auth token from localStorage
-const removeAuthToken = () => {
-  localStorage.removeItem('authToken');
-  localStorage.removeItem('user');
-};
-
-// Helper function to get user data from localStorage
-const getUser = () => {
-  const user = localStorage.getItem('user');
-  return user ? JSON.parse(user) : null;
-};
-
-// Helper function to set user data in localStorage
-const setUser = (user) => {
-  localStorage.setItem('user', JSON.stringify(user));
-};
-
-// Generic API request function
-const apiRequest = async (endpoint, options = {}) => {
-  const url = `${API_BASE_URL}${endpoint}`;
+// Create headers with auth
+const getHeaders = () => {
   const token = getAuthToken();
-  
-  const config = {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` }),
-      ...options.headers,
-    },
-    ...options,
+  return {
+    'Content-Type': 'application/json',
+    ...(token && { 'Authorization': `Bearer ${token}` })
   };
+};
 
+// Generic API call function
+const apiCall = async (url, options = {}) => {
   try {
-    const response = await fetch(url, config);
-    
-    // Check if response is JSON
-    const contentType = response.headers.get('content-type');
-    if (!contentType || !contentType.includes('application/json')) {
-      throw new Error('Server returned invalid response. Please check if backend is running.');
-    }
-    
-    const data = await response.json();
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        ...getHeaders(),
+        ...options.headers
+      }
+    });
 
     if (!response.ok) {
-      throw new Error(data.message || 'Something went wrong');
+      const error = await response.json().catch(() => ({ message: 'Request failed' }));
+      throw new Error(error.message || `HTTP ${response.status}`);
     }
 
-    return data;
+    return await response.json();
   } catch (error) {
-    console.error('API Request Error:', error);
+    console.error('API Error:', error);
     throw error;
   }
 };
 
-// Authentication API functions
+// ==================== AUTH API ====================
 export const authAPI = {
-  // Login user
-  login: async (credentials) => {
-    const data = await apiRequest('/auth/login', {
+  login: (credentials) => 
+    apiCall(`${API_BASE_URL}/auth/login`, {
       method: 'POST',
-      body: JSON.stringify(credentials),
-    });
-    
-    if (data.token) {
-      setAuthToken(data.token);
-      setUser(data.user);
-    }
-    
-    return data;
-  },
+      body: JSON.stringify(credentials)
+    }),
 
-  // Google Sign-In
-  googleSignIn: async (credential) => {
-    const data = await apiRequest('/auth/google/verify', {
+  register: (userData) =>
+    apiCall(`${API_BASE_URL}/auth/register`, {
       method: 'POST',
-      body: JSON.stringify({ credential }),
-    });
-    
-    if (data.token) {
-      setAuthToken(data.token);
-      setUser(data.user);
-    }
-    
-    return data;
-  },
+      body: JSON.stringify(userData)
+    }),
 
-  // Register user
-  register: async (userData) => {
-    const data = await apiRequest('/auth/register', {
+  getProfile: () =>
+    apiCall(`${API_BASE_URL}/auth/profile`),
+
+  forgotPassword: (email) =>
+    apiCall(`${API_BASE_URL}/auth/forgot-password`, {
       method: 'POST',
-      body: JSON.stringify(userData),
-    });
-    
-    if (data.token) {
-      setAuthToken(data.token);
-      setUser(data.user);
-    }
-    
-    return data;
-  },
+      body: JSON.stringify({ email })
+    }),
 
-  // Logout user
-  logout: async () => {
-    try {
-      await apiRequest('/auth/logout', {
-        method: 'POST',
-      });
-    } catch (error) {
-      console.error('Logout error:', error);
-    } finally {
-      removeAuthToken();
-    }
-  },
+  resetPassword: (data) =>
+    apiCall(`${API_BASE_URL}/auth/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify(data)
+    }),
 
-  // Get current user profile
-  getProfile: async () => {
-    return await apiRequest('/auth/profile');
-  },
+  logout: () =>
+    apiCall(`${API_BASE_URL}/auth/logout`, {
+      method: 'POST'
+    }),
 
-  // Check if user is authenticated
   isAuthenticated: () => {
-    const token = getAuthToken();
-    const user = getUser();
-    return !!(token && user);
-  },
-
-  // Get current user from localStorage
-  getCurrentUser: getUser,
+    const token = localStorage.getItem('token') || localStorage.getItem('authToken');
+    return !!token;
+  }
 };
 
-// Dashboard API functions
+// ==================== PRODUCTS API ====================
+export const productsAPI = {
+  getAll: () =>
+    apiCall(`${API_BASE_URL}/products`),
+
+  getById: (id) =>
+    apiCall(`${API_BASE_URL}/products/${id}`),
+
+  create: (productData) =>
+    apiCall(`${API_BASE_URL}/products`, {
+      method: 'POST',
+      body: JSON.stringify(productData)
+    }),
+
+  update: (id, productData) =>
+    apiCall(`${API_BASE_URL}/products/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(productData)
+    }),
+
+  delete: (id) =>
+    apiCall(`${API_BASE_URL}/products/${id}`, {
+      method: 'DELETE'
+    }),
+
+  qrLookup: (qrData) =>
+    apiCall(`${API_BASE_URL}/products/qr-lookup`, {
+      method: 'POST',
+      body: JSON.stringify({ qrData })
+    }),
+
+  qrAdd: (qrData, quantity) =>
+    apiCall(`${API_BASE_URL}/products/qr-add`, {
+      method: 'POST',
+      body: JSON.stringify({ qrData, quantity })
+    })
+};
+
+// ==================== ORDERS API ====================
+export const ordersAPI = {
+  getAll: (limit) =>
+    apiCall(`${API_BASE_URL}/orders${limit ? `?limit=${limit}` : ''}`),
+
+  getById: (id) =>
+    apiCall(`${API_BASE_URL}/orders/${id}`),
+
+  create: (orderData) =>
+    apiCall(`${API_BASE_URL}/orders`, {
+      method: 'POST',
+      body: JSON.stringify(orderData)
+    })
+};
+
+// ==================== DASHBOARD API ====================
 export const dashboardAPI = {
-  // Get dashboard statistics
-  getStats: async () => {
-    return await apiRequest('/dashboard/stats');
-  },
+  getStats: () =>
+    apiCall(`${API_BASE_URL}/dashboard/stats`),
+
+  getTopProducts: () =>
+    apiCall(`${API_BASE_URL}/dashboard/top-products`),
+
+  getRecentActivity: () =>
+    apiCall(`${API_BASE_URL}/dashboard/recent-activity`),
+
+  getSalesForecast: () =>
+    apiCall(`${API_BASE_URL}/sales/forecast`)
 };
 
-// Export utility functions
-export { getAuthToken, setAuthToken, removeAuthToken, getUser, setUser };
+// ==================== INVENTORY API ====================
+export const inventoryAPI = {
+  getLowStock: () =>
+    apiCall(`${API_BASE_URL}/inventory/low-stock`),
+
+  sendLowStockAlert: () =>
+    apiCall(`${API_BASE_URL}/inventory/send-low-stock-alert`, {
+      method: 'POST'
+    })
+};
+
+// ==================== ADMIN API ====================
+export const adminAPI = {
+  getUsers: () =>
+    apiCall(`${API_BASE_URL}/admin/users`),
+
+  createUser: (userData) =>
+    apiCall(`${API_BASE_URL}/admin/users`, {
+      method: 'POST',
+      body: JSON.stringify(userData)
+    }),
+
+  updateUser: (id, userData) =>
+    apiCall(`${API_BASE_URL}/admin/users/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(userData)
+    }),
+
+  deleteUser: (id) =>
+    apiCall(`${API_BASE_URL}/admin/users/${id}`, {
+      method: 'DELETE'
+    })
+};
+
+// ==================== AI API ====================
+export const aiAPI = {
+  // Health check
+  checkHealth: async () => {
+    try {
+      const response = await fetch(`${AI_BASE_URL}/health`);
+      return response.ok;
+    } catch {
+      return false;
+    }
+  },
+
+  // Train models
+  trainModels: () =>
+    fetch(`${AI_BASE_URL}/train`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    }).then(res => res.json()),
+
+  // Get all predictions (expiry + demand + reorder)
+  getAllPredictions: () =>
+    fetch(`${AI_BASE_URL}/predict`, {
+      headers: { 'Content-Type': 'application/json' }
+    }).then(res => res.json()),
+
+  // Get expiry predictions
+  getExpiryPredictions: () =>
+    fetch(`${AI_BASE_URL}/predict/expiry`, {
+      headers: { 'Content-Type': 'application/json' }
+    }).then(res => res.json()),
+
+  // Get demand predictions
+  getDemandPredictions: () =>
+    fetch(`${AI_BASE_URL}/predict/demand`, {
+      headers: { 'Content-Type': 'application/json' }
+    }).then(res => res.json()),
+
+  // Get reorder suggestions
+  getReorderSuggestions: () =>
+    fetch(`${AI_BASE_URL}/suggest/reorder`, {
+      headers: { 'Content-Type': 'application/json' }
+    }).then(res => res.json()),
+
+  // Chatbot
+  sendChatMessage: (message) =>
+    fetch(`${AI_BASE_URL}/chatbot`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message })
+    }).then(res => res.json())
+};
+
+// ==================== CHATBOT API (via backend proxy) ====================
+export const chatbotAPI = {
+  sendMessage: (message) =>
+    apiCall(`${API_BASE_URL}/chat`, {
+      method: 'POST',
+      body: JSON.stringify({ message })
+    })
+};
+
+export default {
+  auth: authAPI,
+  products: productsAPI,
+  orders: ordersAPI,
+  dashboard: dashboardAPI,
+  inventory: inventoryAPI,
+  admin: adminAPI,
+  ai: aiAPI,
+  chatbot: chatbotAPI
+};

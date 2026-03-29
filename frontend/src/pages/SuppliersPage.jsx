@@ -29,7 +29,7 @@ export default function SuppliersPage() {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
-      setSuppliers(data);
+      setSuppliers(Array.isArray(data) ? data : []);
       setLoading(false);
     } catch (error) {
       console.error('Error fetching suppliers:', error);

@@ -29,7 +29,7 @@ export default function CustomersPage() {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
-      setCustomers(data);
+      setCustomers(Array.isArray(data) ? data : []);
       setLoading(false);
     } catch (error) {
       console.error('Error fetching customers:', error);

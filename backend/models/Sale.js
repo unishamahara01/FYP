@@ -24,7 +24,7 @@ const saleSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['Cash', 'Card', 'Insurance', 'Online']
+    enum: ['Cash', 'Card', 'QR Payment', 'Online']
   },
   processedBy: {
     type: mongoose.Schema.Types.ObjectId,
