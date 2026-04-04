@@ -11,10 +11,19 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/meditrust
   .then(async () => {
     console.log('✓ Connected to MongoDB\n');
     console.log('═══════════════════════════════════════');
-    console.log('   COMPREHENSIVE DATA SEEDING');
+    console.log('   CLEARING OLD DATA & RESEEDING');
     console.log('═══════════════════════════════════════\n');
     
     try {
+      // Clear existing data
+      console.log('🗑️  Clearing old data...');
+      await Sale.deleteMany({});
+      await Order.deleteMany({});
+      await Product.deleteMany({});
+      await Customer.deleteMany({});
+      await Supplier.deleteMany({});
+      console.log('✅ Old data cleared\n');
+      
       // 1. Create Suppliers
       console.log('📦 Creating Suppliers...');
       const suppliers = await Supplier.insertMany([
@@ -394,8 +403,8 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/meditrust
           name: 'Cough Syrup 100ml',
           genericName: 'Dextromethorphan',
           category: 'Respiratory',
-          manufacturer: 'Cipla Ltd.',
           batchNumber: 'COU-2024-042',
+          manufacturer: 'Cipla Ltd.',
           quantity: 310,
           price: 28,
           expiryDate: new Date('2025-07-15'),
@@ -406,8 +415,8 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/meditrust
       ]);
       console.log(`✅ Created ${products.length} products\n`);
 
-      // 4. Create Orders and Sales (Last 6 months with realistic patterns)
-      console.log('📋 Creating Orders and Sales...');
+      // 4. Create Orders and Sales (Last 6 months)
+      console.log('📋 Creating Orders and Sales (6 months of data)...');
       
       const paymentMethods = ['Cash', 'Card', 'QR Payment'];
       const today = new Date();
@@ -415,33 +424,27 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/meditrust
       let totalOrders = 0;
       let totalRevenue = 0;
 
-      // Generate orders for last 6 months
       for (let monthsAgo = 5; monthsAgo >= 0; monthsAgo--) {
         const monthDate = new Date(today);
         monthDate.setMonth(monthDate.getMonth() - monthsAgo);
         
         const daysInMonth = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate();
-        
-        // Generate 15-25 orders per month (more recent months have more orders)
         const ordersThisMonth = 15 + Math.floor(Math.random() * 10) + (5 - monthsAgo) * 2;
         
         for (let i = 0; i < ordersThisMonth; i++) {
           const orderDate = new Date(monthDate);
           orderDate.setDate(Math.floor(Math.random() * daysInMonth) + 1);
-          orderDate.setHours(Math.floor(Math.random() * 12) + 8); // 8 AM to 8 PM
+          orderDate.setHours(Math.floor(Math.random() * 12) + 8);
           orderDate.setMinutes(Math.floor(Math.random() * 60));
           
-          // Select random customer
           const customer = customers[Math.floor(Math.random() * customers.length)];
-          
-          // Select 1-4 random products
           const numItems = Math.floor(Math.random() * 3) + 1;
           const orderItems = [];
           let orderTotal = 0;
           
           for (let j = 0; j < numItems; j++) {
             const product = products[Math.floor(Math.random() * products.length)];
-            const quantity = Math.floor(Math.random() * 5) + 1; // 1-5 units
+            const quantity = Math.floor(Math.random() * 5) + 1;
             const subtotal = product.price * quantity;
             
             orderItems.push({
@@ -455,7 +458,6 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/meditrust
             orderTotal += subtotal;
           }
           
-          // Create order
           const order = await Order.create({
             orderNumber: `ORD-${orderNumber++}`,
             customerName: customer.fullName,
@@ -468,7 +470,6 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/meditrust
             updatedAt: orderDate
           });
           
-          // Create corresponding sale
           await Sale.create({
             order: order._id,
             amount: orderTotal,
@@ -486,7 +487,6 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/meditrust
       
       console.log(`✅ Created ${totalOrders} orders and sales\n`);
       
-      // Summary
       console.log('═══════════════════════════════════════');
       console.log('✅ DATA SEEDING COMPLETE!');
       console.log('═══════════════════════════════════════\n');
@@ -504,13 +504,11 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/meditrust
       console.log(`   To: ${today.toLocaleDateString()}`);
       console.log('');
       
-      console.log('💡 Features Ready:');
-      console.log('   ✅ Sales Analytics (6 months of data)');
-      console.log('   ✅ Daily Sales Trend Graph');
-      console.log('   ✅ Top Products Analysis');
-      console.log('   ✅ Customer History');
-      console.log('   ✅ Inventory Management');
-      console.log('   ✅ AI Predictions (enough data to train)');
+      console.log('💡 Next Steps:');
+      console.log('   1. Refresh your browser');
+      console.log('   2. Go to AI Analytics');
+      console.log('   3. Click "Retrain & Refresh"');
+      console.log('   4. All AI features will work with this data!');
       console.log('');
       
       process.exit(0);

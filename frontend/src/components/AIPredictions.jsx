@@ -210,14 +210,12 @@ export default function AIPredictions() {
                 <td>{pred.batchNumber}</td>
                 <td>
                   <div className="expiry-info">
-                    <div>{new Date(pred.expiryDate).toLocaleDateString()}</div>
-                    <div className="days-remaining">{pred.daysUntilExpiry} days</div>
+                    <div>{pred.daysUntilExpiry < 0 ? 'EXPIRED' : `${pred.daysUntilExpiry} days left`}</div>
                   </div>
                 </td>
                 <td>
                   <div className="stock-info">
-                    <div>{pred.currentStock} units</div>
-                    <div className="stock-value">Rs {pred.stockValue.toLocaleString()}</div>
+                    <div>{pred.currentStock || 0} units</div>
                   </div>
                 </td>
                 <td>

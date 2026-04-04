@@ -130,7 +130,26 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
   // Fetch dashboard data on mount
   useEffect(() => {
     fetchDashboardData();
-    fetchProducts(); // Load products on mount for search
+    fetchProducts();
+  }, []);
+
+  // eSewa Payment Response Handler
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const status = urlParams.get('esewa');
+    const orderId = urlParams.get('oid');
+
+    if (status === 'success') {
+      alert(`✅ eSewa Payment Successful!\nOrder ID: ${orderId}\nYour order has been confirmed.`);
+      // Clean URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+      if (typeof fetchOrders === 'function') fetchOrders();
+      if (typeof fetchDashboardData === 'function') fetchDashboardData();
+    } else if (status === 'failed') {
+      const error = urlParams.get('error');
+      alert(`❌ eSewa Payment Failed: ${error || 'User cancelled or transaction failed'}`);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
   }, []);
 
   // Fetch products when inventory section is active
@@ -223,7 +242,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
     }
   };
 
-  const fetchAIPredictions = async () => {
+  const fetchAIPredictions = async (forceRetrain = false) => {
     try {
       console.log('🔄 Fetching AI predictions...');
       
@@ -237,13 +256,20 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
       }
       console.log('✅ ML backend is healthy');
 
+      // Force retrain if requested
+      if (forceRetrain) {
+        console.log('🎓 Force retraining model...');
+        await trainAIModel(true);
+        return;
+      }
+
       // Fetch expiry predictions from ML backend
       const res = await fetch('http://localhost:5001/predict');
       
       // If predictions fail (model not trained), auto-train first
       if (!res.ok) {
         console.log('🎓 Model not trained yet, training automatically...');
-        await trainAIModel();
+        await trainAIModel(true);
         return; // trainAIModel will call fetchAIPredictions again
       }
       
@@ -497,13 +523,16 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
       console.log('📡 Sending QR lookup request to backend...');
       console.log('🔑 Using auth token:', token ? 'Present' : 'Missing');
       
+      // Send the entire qrData so backend can use batchNumber if ID fails
+      let dataToSend = qrData;
+      
       const res = await fetch('http://localhost:3001/api/products/qr-lookup', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({ qrData: typeof qrData === 'string' ? qrData : JSON.stringify(qrData) })
+        body: JSON.stringify({ qrData: dataToSend })
       });
       
       console.log('📥 QR lookup response status:', res.status);
@@ -1437,7 +1466,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
                   </div>
                   <h3 style={{ color: '#166534', margin: 0 }}>Order Confirmed!</h3>
                   <p style={{ color: '#666' }}>
-                    {newOrder.paymentMethod === 'QR Payment' ? 'Redirecting to payment gateway...' : 'Processing receipt...'}
+                    {newOrder.paymentMethod === 'QR Payment' ? 'Processing secure digital payment...' : 'Processing receipt...'}
                   </p>
                 </div>
               )}
@@ -1528,78 +1557,55 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
                       return sum + ((item.quantity || 0) * (product ? product.price : 0));
                     }, 0);
                     
-                    // Generate standard mobile payment deep link for EMVCo / FonePay / eSewa
-                    const qrPayload = `https://esewa.com.np/#/pay?merchant=meditrust_fyp&amt=${totalAmount}&pid=ORD-${Date.now()}`;
+                    const qrPayload = `https://esewa.com.np/#/pay?merchant=EPAYTEST&amt=${totalAmount}&pid=ORD-PQ-${Date.now()}`;
 
                     const handleSandboxPayment = async () => {
-                        // Officially commit the order to the database FIRST before redirecting away from the React state
+                        setOrderProcessing(true);
                         const token = localStorage.getItem('authToken') || localStorage.getItem('token');
                         
-                        // MUST strictly match Mongoose Enum: 'Cash', 'Card', 'QR Payment', or 'Online'
-                        const orderToSave = { ...newOrder, paymentMethod: 'Online' };
-                        
                         try {
-                           const res = await fetch('http://localhost:3001/api/orders', {
-                             method: 'POST',
-                             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                             body: JSON.stringify(orderToSave)
-                           });
-                           
-                           if (!res.ok) {
-                               const errorData = await res.json();
-                               console.error("MongoDB Validation Failed:", errorData);
-                                                     }
-                        } catch(err) {
-                           setOrderProcessing(false);
-                           console.error('Silent save err prior to redirect', err);
-                           alert("Network error. Could not connect to internal server.");
-                           return;
-                        }
- 
-                        setOrderSuccess(true);
-                        setOrderProcessing(false);
+                            console.log("🚀 Initiating eSewa payment...");
+                            const res = await fetch('http://localhost:3001/api/payments/initiate-esewa', {
+                                method: 'POST',
+                                headers: { 
+                                    'Content-Type': 'application/json', 
+                                    Authorization: `Bearer ${token}` 
+                                },
+                                body: JSON.stringify({
+                                    customerName: newOrder.customerName,
+                                    items: newOrder.items
+                                })
+                            });
 
-                        // Give user time to see success BEFORE redirecting
-                        setTimeout(() => {
-                            const uuid = `ORD-${Date.now()}`;
-                            const amountStr = totalAmount.toString();
-                            const productCode = 'EPAYTEST';
-                            const secret = '8gBm/:&EnhH.1/q'; 
-
-                            const message = `total_amount=${amountStr},transaction_uuid=${uuid},product_code=${productCode}`;
-                            const hash = CryptoJS.HmacSHA256(message, secret);
-                            const signature = CryptoJS.enc.Base64.stringify(hash);
-
-                            const form = document.createElement('form');
-                            form.action = 'https://rc-epay.esewa.com.np/api/epay/main/v2/form';
-                            form.method = 'POST';
-                            form.style.display = 'none';
-
-                            const inputs = {
-                                amount: amountStr,
-                                tax_amount: '0',
-                                total_amount: amountStr,
-                                transaction_uuid: uuid,
-                                product_code: productCode,
-                                product_service_charge: '0',
-                                product_delivery_charge: '0',
-                                success_url: 'http://localhost:3000/?esewa=success',
-                                failure_url: 'http://localhost:3000/?esewa=failure',
-                                signed_field_names: 'total_amount,transaction_uuid,product_code',
-                                signature: signature
-                            };
-
-                            for (const ObjectKey in inputs) {
-                                const input = document.createElement('input');
-                                input.type = 'hidden';
-                                input.name = ObjectKey;
-                                input.value = inputs[ObjectKey];
-                                form.appendChild(input);
+                            if (!res.ok) {
+                                const errorData = await res.json();
+                                throw new Error(errorData.message || 'Failed to initiate payment');
                             }
-                            
+                            const { paymentParams } = await res.json();
+                            console.log("🧪 Received eSewa payment params:", paymentParams);
+
+                            // 2. Redirect to eSewa Sandbox via programmatic form submission
+                            // This is the standard way to integrate eSewa ePay V2
+                            const form = document.createElement('form');
+                            form.setAttribute('method', 'POST');
+                            form.setAttribute('action', 'https://rc-epay.esewa.com.np/api/epay/main/v2/form');
+
+                            for (const key in paymentParams) {
+                                const hiddenField = document.createElement('input');
+                                hiddenField.setAttribute('type', 'hidden');
+                                hiddenField.setAttribute('name', key);
+                                hiddenField.setAttribute('value', paymentParams[key]);
+                                form.appendChild(hiddenField);
+                            }
+
                             document.body.appendChild(form);
                             form.submit();
-                        }, 2000);
+
+                        } catch (err) {
+                            setOrderProcessing(false);
+                            console.error('❌ eSewa redirect error:', err);
+                            alert(`Failed to start eSewa payment: ${err.message}`);
+                        }
                     };
 
                     return (
@@ -2288,12 +2294,12 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
           <button 
             className="sidebar-btn" 
             onClick={() => {
-              console.log('🔄 Manual refresh triggered');
-              fetchAIPredictions();
+              console.log('🔄 Manual refresh with retrain triggered');
+              fetchAIPredictions(true);
             }}
             style={{marginLeft: 'auto'}}
           >
-            🔄 Refresh Data
+            🔄 Retrain & Refresh
           </button>
         </div>
 
@@ -2422,7 +2428,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
                                     type="number" 
                                     className="promo-input" 
                                     id={`discount-${pred.productId}`}
-                                    defaultValue="20" 
+                                    defaultValue={Math.round((pred.riskScore / 100) * 30)} 
                                     min="0" 
                                     max="100" 
                                   />

@@ -16,6 +16,11 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
   const [error, setError] = React.useState('');
   const [searchQuery, setSearchQuery] = React.useState('');
   
+  // AI Analytics state
+  const [aiPredictions, setAiPredictions] = React.useState(null);
+  const [demandPredictions, setDemandPredictions] = React.useState([]);
+  const [aiActiveTab, setAiActiveTab] = React.useState('expiry');
+  
   // Modal states
   const [showAddModal, setShowAddModal] = React.useState(false);
   const [showEditModal, setShowEditModal] = React.useState(false);
@@ -27,6 +32,13 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
 
   // Get current user info
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+
+  // Fetch AI predictions when AI Analytics tab is active
+  React.useEffect(() => {
+    if (activeTab === 'ai-analytics') {
+      fetchAIPredictions();
+    }
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch data on component mount and tab change
   React.useEffect(() => {
@@ -78,8 +90,195 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
     }
   };
 
+  const fetchAIPredictions = async (forceRetrain = false) => {
+    try {
+      console.log('🔄 Fetching AI predictions...');
+      
+      // Check if ML backend is available
+      const healthCheck = await fetch('http://localhost:5001/health');
+      if (!healthCheck.ok) {
+        console.log('❌ ML backend health check failed');
+        setAiPredictions(null);
+        setDemandPredictions([]);
+        return;
+      }
+      console.log('✅ ML backend is healthy');
+
+      // Force retrain if requested
+      if (forceRetrain) {
+        console.log('🎓 Force retraining model...');
+        await trainAIModel(true);
+        return;
+      }
+
+      // Fetch expiry predictions from ML backend
+      const res = await fetch('http://localhost:5001/predict');
+      
+      // If predictions fail (model not trained), auto-train first
+      if (!res.ok) {
+        console.log('🎓 Model not trained yet, training automatically...');
+        await trainAIModel(true);
+        return; // trainAIModel will call fetchAIPredictions again
+      }
+      
+      const data = await res.json();
+      console.log('📊 AI Predictions received:', data);
+      console.log('📊 Number of predictions:', data.predictions?.length || 0);
+      console.log('📊 Predictions:', data.predictions);
+      
+      // Log expired products specifically
+      const expiredProducts = data.predictions?.filter(p => p.daysUntilExpiry < 0) || [];
+      console.log('⚠️ Expired products found:', expiredProducts.length);
+      if (expiredProducts.length > 0) {
+        console.log('⚠️ Expired products:', expiredProducts);
+      }
+      
+      setAiPredictions(data || { predictions: [] });
+      
+      // Fetch demand predictions
+      const demandRes = await fetch('http://localhost:5001/predict/demand');
+      if (demandRes.ok) {
+        const demandData = await demandRes.json();
+        if (demandData.success && demandData.predictions) {
+          setDemandPredictions(demandData.predictions);
+        }
+      }
+    } catch (error) {
+      console.error('❌ ML backend not available:', error);
+      setAiPredictions(null);
+      setDemandPredictions([]);
+    }
+  };
+
+  const trainAIModel = async (silent = false) => {
+    try {
+      const response = await fetch('http://localhost:5001/train', {
+        method: 'POST'
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        if (!silent) {
+          alert(`✅ AI Model trained successfully!\n\nTraining samples: ${data.training_samples}\nAccuracy: ${(data.accuracy * 100).toFixed(1)}%`);
+        }
+        fetchAIPredictions();
+      } else {
+        if (!silent) {
+          alert(`❌ Training failed: ${data.message}`);
+        }
+      }
+    } catch (err) {
+      if (!silent) {
+        alert(`❌ ML Backend not available. Please start the ML server first.`);
+      }
+    }
+  };
+
+  const handleApplyPromotion = async (productId, discountPercentage) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:3001/api/inventory/apply-promotion', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          productId,
+          discountPercentage: parseInt(discountPercentage),
+          isPromoted: true
+        })
+      });
+
+      const data = await response.json();
+      
+      if (response.ok && data.success) {
+        alert(`✅ ${discountPercentage}% discount applied successfully!`);
+        
+        // Force complete refresh from AI backend
+        await fetchAIPredictions();
+      } else {
+        alert(`❌ Failed to apply promotion: ${data.message || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error('Promotion error:', err);
+      alert(`❌ Error applying promotion: ${err.message}`);
+    }
+  };
+
+  const handleRemovePromotion = async (productId) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('http://localhost:3001/api/inventory/apply-promotion', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          productId,
+          isPromoted: false,
+          discountPercentage: 0
+        })
+      });
+
+      const data = await response.json();
+      
+      if (response.ok && data.success) {
+        // Update the prediction in state immediately without full refresh
+        if (aiPredictions && aiPredictions.predictions) {
+          const updatedPredictions = aiPredictions.predictions.map(pred => 
+            pred.productId === productId 
+              ? { ...pred, isPromoted: false, discountPercentage: 0 }
+              : pred
+          );
+          setAiPredictions({ ...aiPredictions, predictions: updatedPredictions });
+        }
+        
+        alert(`✅ Promotion removed successfully!`);
+      } else {
+        alert(`❌ Failed to remove promotion: ${data.message}`);
+      }
+    } catch (err) {
+      alert(`❌ Error removing promotion: ${err.message}`);
+    }
+  };
+
+  const handleDisposeProduct = async (productId, productName) => {
+    if (!window.confirm(`⚠️ Are you sure you want to mark "${productName}" as disposed? This will set quantity to 0.`)) {
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`http://localhost:3001/api/products/${productId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          quantity: 0
+        })
+      });
+
+      const data = await response.json();
+      
+      if (response.ok && data.product) {
+        alert(`✅ ${productName} has been disposed successfully! Quantity set to 0.`);
+        fetchAIPredictions();
+      } else {
+        alert(`❌ Failed to dispose product: ${data.message || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error('Dispose error:', err);
+      alert(`❌ Error disposing product: ${err.message}`);
+    }
+  };
+
   const fetchData = async () => {
-    if (activeTab === 'reports' || activeTab === 'suppliers' || activeTab === 'customers') return; // These pages handle their own data fetching
+    if (activeTab === 'reports' || activeTab === 'suppliers' || activeTab === 'customers' || activeTab === 'ai-analytics') return; // These pages handle their own data fetching
     
     setLoading(true);
     setError('');
@@ -752,6 +951,339 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
     );
   };
 
+  const renderAIAnalytics = () => {
+    return (
+      <div className="section-content">
+        <div className="ai-analytics-header">
+          <div className="ai-analytics-title">
+            <div className="ai-icon-large">🤖</div>
+            <div>
+              <h2>AI Analytics Suite</h2>
+              <p className="ai-subtitle">Intelligent insights for inventory, expiry, and demand forecasting</p>
+            </div>
+          </div>
+          <button 
+            className="sidebar-btn" 
+            onClick={() => {
+              console.log('🔄 Manual refresh with retrain triggered');
+              fetchAIPredictions(true);
+            }}
+            style={{marginLeft: 'auto'}}
+          >
+            🔄 Retrain & Refresh
+          </button>
+        </div>
+
+        {/* Tabs */}
+        <div className="ai-tabs">
+          <button 
+            className={`ai-tab ${aiActiveTab === 'expiry' ? 'active' : ''}`}
+            onClick={() => setAiActiveTab('expiry')}
+          >
+            ⚠️ Expiry Prediction
+          </button>
+          <button 
+            className={`ai-tab ${aiActiveTab === 'demand' ? 'active' : ''}`}
+            onClick={() => setAiActiveTab('demand')}
+          >
+            📊 Demand Forecast
+          </button>
+        </div>
+
+        {/* Expiry Prediction Tab */}
+        {aiActiveTab === 'expiry' && (
+          <>
+            {/* Summary Cards */}
+            {aiPredictions && aiPredictions.predictions && aiPredictions.predictions.length > 0 ? (
+              <>
+                <div className="ai-summary-cards">
+                  <div className="ai-summary-card critical">
+                    <div className="ai-summary-number">{aiPredictions.criticalRisk || 0}</div>
+                    <div className="ai-summary-label">CRITICAL RISK ITEMS</div>
+                  </div>
+                  <div className="ai-summary-card high">
+                    <div className="ai-summary-number">{aiPredictions.highRisk || 0}</div>
+                    <div className="ai-summary-label">HIGH RISK ITEMS</div>
+                  </div>
+                  <div className="ai-summary-card value">
+                    <div className="ai-summary-number">Rs {(aiPredictions.totalValueAtRisk || 0).toLocaleString()}</div>
+                    <div className="ai-summary-label">TOTAL VALUE AT RISK</div>
+                  </div>
+                </div>
+
+                {/* Expiry Risk Table */}
+                <div className="dashboard-card" style={{marginTop: '24px'}}>
+                  <div className="card-header">
+                    <h3>Top Items at Risk of Expiry</h3>
+                  </div>
+                  <div className="table-container">
+                    <table className="expiry-risk-table">
+                      <thead>
+                        <tr>
+                          <th>PRODUCT</th>
+                          <th>CURRENT STOCK</th>
+                          <th>DAYS LEFT</th>
+                          <th>RISK SCORE</th>
+                          <th>AI RECOMMENDATION</th>
+                          <th>PROMOTION</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {aiPredictions.predictions.map((pred, index) => (
+                          <tr key={index}>
+                            <td>
+                              <div className="product-cell">
+                                <div className="product-name-expiry">{pred.productName}</div>
+                                <div className="product-batch">Batch: {pred.batchNumber}</div>
+                              </div>
+                            </td>
+                            <td>
+                              <div className="stock-cell">
+                                <div className="stock-units">{pred.currentStock} units</div>
+                              </div>
+                            </td>
+                            <td>
+                              <span className={`days-badge ${pred.daysUntilExpiry < 0 ? 'expired' : pred.daysUntilExpiry < 30 ? 'critical' : 'warning'}`}>
+                                {pred.daysUntilExpiry < 0 ? `${Math.abs(pred.daysUntilExpiry)} days` : `${pred.daysUntilExpiry} days`}
+                              </span>
+                            </td>
+                            <td>
+                              <div className="risk-score-cell">
+                                <div className="risk-bar-container">
+                                  <div 
+                                    className="risk-bar-fill" 
+                                    style={{
+                                      width: `${pred.riskScore}%`,
+                                      backgroundColor: pred.riskLevel === 'Critical' ? '#ef4444' : pred.riskLevel === 'High' ? '#f59e0b' : pred.riskLevel === 'Medium' ? '#eab308' : '#10b981'
+                                    }}
+                                  ></div>
+                                </div>
+                                <span className="risk-score-text">{pred.riskScore}/100 ({pred.riskLevel})</span>
+                              </div>
+                            </td>
+                            <td>
+                              <div className="recommendation-cell">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" style={{flexShrink: 0}}>
+                                  <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                                  <path d="M2 17l10 5 10-5"/>
+                                  <path d="M2 12l10 5 10-5"/>
+                                </svg>
+                                <span>{pred.recommendation}</span>
+                              </div>
+                            </td>
+                            <td>
+                              {pred.daysUntilExpiry < 0 ? (
+                                <button 
+                                  className="promo-btn dispose"
+                                  onClick={() => handleDisposeProduct(pred.productId, pred.productName)}
+                                >
+                                  🗑️ Dispose
+                                </button>
+                              ) : pred.currentStock === 0 ? (
+                                <span className="promo-status" style={{color: '#64748b'}}>
+                                  📦 Out of Stock
+                                </span>
+                              ) : pred.isPromoted ? (
+                                <span className="promo-status active">
+                                  🟢 {pred.discountPercentage}% Active
+                                  <button 
+                                    className="promo-remove"
+                                    onClick={() => handleRemovePromotion(pred.productId)}
+                                  >
+                                    Remove Promo
+                                  </button>
+                                </span>
+                              ) : pred.riskLevel === 'Critical' || pred.riskLevel === 'High' ? (
+                                <div className="promo-input-group">
+                                  <input 
+                                    type="number" 
+                                    className="promo-input" 
+                                    id={`discount-${pred.productId}`}
+                                    defaultValue={Math.round((pred.riskScore / 100) * 30)} 
+                                    min="0" 
+                                    max="100" 
+                                  />
+                                  <span className="promo-percent">%</span>
+                                  <button 
+                                    className="promo-btn apply"
+                                    onClick={() => {
+                                      const discountInput = document.getElementById(`discount-${pred.productId}`);
+                                      const discount = discountInput ? discountInput.value : 20;
+                                      handleApplyPromotion(pred.productId, discount);
+                                    }}
+                                  >
+                                    Apply
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="promo-status">No promotion</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            ) : aiPredictions === null ? (
+              <div className="ai-empty-state-large">
+                <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="1.5">
+                  <circle cx="12" cy="12" r="10"/>
+                  <path d="M12 6v6l4 2"/>
+                </svg>
+                <h3>ML Backend Offline</h3>
+                <p>Start the ML server to see AI predictions</p>
+                <button className="sidebar-btn" style={{marginTop: '16px'}} onClick={fetchAIPredictions}>
+                  🔄 Retry Connection
+                </button>
+              </div>
+            ) : (
+              <div className="ai-empty-state-large">
+                <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="1.5">
+                  <circle cx="12" cy="12" r="10"/>
+                  <path d="M12 6v6l4 2"/>
+                </svg>
+                <h3>No High-Risk Items</h3>
+                <p>All products are within safe expiry ranges!</p>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Demand Forecast Tab */}
+        {aiActiveTab === 'demand' && (
+          <>
+            {/* Summary Cards */}
+            <div className="ai-summary-cards">
+              <div className="ai-summary-card high">
+                <div className="ai-summary-number">{demandPredictions.length > 0 ? demandPredictions.length : 0}</div>
+                <div className="ai-summary-label">PRODUCTS ANALYZED</div>
+              </div>
+              <div className="ai-summary-card critical">
+                <div className="ai-summary-number">{demandPredictions.filter(p => (p.predicted30DayDemand || 0) > 0).length}</div>
+                <div className="ai-summary-label">TRENDING PRODUCTS IDENTIFIED</div>
+              </div>
+              <div className="ai-summary-card value">
+                <div className="ai-summary-number">
+                  {demandPredictions.length > 0 
+                    ? `${Math.round(demandPredictions.reduce((sum, p) => sum + (p.predicted30DayDemand || 0), 0) / demandPredictions.length)} units/mo`
+                    : '0 units/mo'
+                  }
+                </div>
+                <div className="ai-summary-label">AVG MONTHLY DEMAND</div>
+              </div>
+            </div>
+
+            {/* Demand Forecast Table */}
+            <div className="dashboard-card" style={{marginTop: '24px'}}>
+              <div className="card-header">
+                <h3>Top Forecasted Demand</h3>
+              </div>
+              {demandPredictions.length > 0 ? (
+                <div className="table-container">
+                  <table className="expiry-risk-table">
+                    <thead>
+                      <tr>
+                        <th>PRODUCT (CATEGORY)</th>
+                        <th>CURRENT STOCK</th>
+                        <th>PREDICTED 30 DAY DEMAND</th>
+                        <th>MARKET TREND</th>
+                        <th>STOCKOUT RISK</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {demandPredictions.slice(0, 10).map((prediction, index) => {
+                        const currentStock = prediction.currentStock || 0;
+                        const predictedDemand = prediction.predicted30DayDemand || 0;
+                        const stockoutRisk = prediction.stockoutRisk || 'Low';
+                        const daysUntilStockout = Math.floor(prediction.daysUntilStockout || 999);
+                        const avgDailySales = predictedDemand > 0 ? (predictedDemand / 30).toFixed(1) : 0;
+                        
+                        return (
+                          <tr key={index}>
+                            <td>
+                              <div className="product-cell">
+                                <div className="product-name-expiry">{prediction.productName}</div>
+                                <div className="product-batch">General</div>
+                              </div>
+                            </td>
+                            <td>
+                              <div className="stock-cell">
+                                <div className="stock-units">{currentStock} units</div>
+                                <div className="stock-value-text">Avg Sales: {avgDailySales} units/day</div>
+                              </div>
+                            </td>
+                            <td>
+                              <div className="stock-cell">
+                                <div className="stock-units" style={{color: '#2563eb', fontWeight: 700}}>{predictedDemand} units/mo</div>
+                                <div className="stock-value-text">Revenue: Rs {(predictedDemand * 50).toLocaleString()}</div>
+                              </div>
+                            </td>
+                            <td>
+                              <span className="days-badge" style={{
+                                background: stockoutRisk === 'High' ? '#fee2e2' : stockoutRisk === 'Medium' ? '#fef3c7' : '#dcfce7',
+                                color: stockoutRisk === 'High' ? '#dc2626' : stockoutRisk === 'Medium' ? '#d97706' : '#16a34a'
+                              }}>
+                                {stockoutRisk === 'High' ? 'Increasing' : stockoutRisk === 'Medium' ? 'Moderate' : 'Stable'}
+                              </span>
+                            </td>
+                            <td>
+                              <div className="recommendation-cell">
+                                {stockoutRisk === 'High' ? (
+                                  <>
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" style={{flexShrink: 0}}>
+                                      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                                      <line x1="12" y1="9" x2="12" y2="13"/>
+                                      <line x1="12" y1="17" x2="12.01" y2="17"/>
+                                    </svg>
+                                    <span style={{color: '#ef4444', fontWeight: 600}}>Out in {daysUntilStockout} days</span>
+                                  </>
+                                ) : stockoutRisk === 'Medium' ? (
+                                  <>
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" style={{flexShrink: 0}}>
+                                      <circle cx="12" cy="12" r="10"/>
+                                      <line x1="12" y1="8" x2="12" y2="12"/>
+                                      <line x1="12" y1="16" x2="12.01" y2="16"/>
+                                    </svg>
+                                    <span style={{color: '#f59e0b', fontWeight: 600}}>Out in {daysUntilStockout} days</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2" style={{flexShrink: 0}}>
+                                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                                      <polyline points="22 4 12 14.01 9 11.01"/>
+                                    </svg>
+                                    <span style={{color: '#10b981', fontWeight: 600}}>Stock sufficient</span>
+                                  </>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div style={{padding: '40px', textAlign: 'center', color: '#64748b'}}>
+                  <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="1.5" style={{margin: '0 auto 16px'}}>
+                    <path d="M3 3v18h18"/>
+                    <path d="M18 17V9"/>
+                    <path d="M13 17V5"/>
+                    <path d="M8 17v-3"/>
+                  </svg>
+                  <p style={{fontSize: '16px', marginBottom: '8px'}}>No AI Demand Predictions Available</p>
+                  <p style={{fontSize: '14px', color: '#94a3b8'}}>Click "Retrain & Refresh" to generate demand forecasts</p>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="admin-dashboard-container">
       {/* SIDEBAR */}
@@ -834,6 +1366,18 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
             </svg>
             <span className="nav-text">Reports</span>
           </div>
+
+          <div 
+            className={`nav-item ${activeTab === 'ai-analytics' ? 'active' : ''}`}
+            onClick={() => setActiveTab('ai-analytics')}
+          >
+            <svg className="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M12 16v-4"/>
+              <path d="M12 8h.01"/>
+            </svg>
+            <span className="nav-text">AI Analytics</span>
+          </div>
         </div>
 
         <div className="sidebar-footer">
@@ -912,89 +1456,95 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
         )}
 
         <div className="dashboard-body">
-          {/* Stats Cards */}
-          {renderStatsCards()}
+          {/* Stats Cards - only show on Users tab */}
+          {activeTab === 'users' && renderStatsCards()}
 
           {/* Content Section */}
-          <div className="admin-content-section">
-            <div className="admin-content-header">
-              <h2>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  {activeTab === 'users' && (
-                    <>
-                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-                      <circle cx="12" cy="7" r="4"/>
-                    </>
-                  )}
-                  {activeTab === 'departments' && (
-                    <>
-                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                      <line x1="9" y1="9" x2="15" y2="9"/>
-                      <line x1="9" y1="15" x2="15" y2="15"/>
-                    </>
-                  )}
-                  {activeTab === 'pharmacies' && (
-                    <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
-                  )}
-                {activeTab === 'reports' && (
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 10l-5 5-5-5M12 15V3"/>
-                )}
-              </svg>
-              {activeTab === 'reports' ? 'Analytics & Reports' : `${activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Management`}
-            </h2>
-            {activeTab !== 'reports' && activeTab !== 'suppliers' && activeTab !== 'customers' && (
-              <button
-                className="admin-add-button"
-                onClick={() => {
-                  if (activeTab === 'pharmacies') {
-                    setFormData({
-                      address: {},
-                      contact: {},
-                      license: {}
-                    });
-                  } else {
-                    setFormData({});
-                  }
-                  setShowAddModal(true);
-                }}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="12" y1="5" x2="12" y2="19"/>
-                  <line x1="5" y1="12" x2="19" y2="12"/>
-                </svg>
-                Add {activeTab.slice(0, -1)}
-              </button>
-            )}
-          </div>
-
-          {activeTab === 'reports' ? (
-            <AdminReportsPage />
-          ) : activeTab === 'suppliers' ? (
-            <SuppliersPage />
-          ) : activeTab === 'customers' ? (
-            <CustomersPage />
+          {activeTab === 'ai-analytics' ? (
+            // AI Analytics - no header, just render the content
+            renderAIAnalytics()
           ) : (
-            <div className="admin-management-container">
-              <div className="admin-search-bar">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <circle cx="11" cy="11" r="8"/>
-                  <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-                </svg>
-                <input 
-                  type="text" 
-                  placeholder={`Search ${activeTab}...`} 
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)} 
-                />
+            <div className="admin-content-section">
+              <div className="admin-content-header">
+                <h2>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    {activeTab === 'users' && (
+                      <>
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                        <circle cx="12" cy="7" r="4"/>
+                      </>
+                    )}
+                    {activeTab === 'departments' && (
+                      <>
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                        <line x1="9" y1="9" x2="15" y2="9"/>
+                        <line x1="9" y1="15" x2="15" y2="15"/>
+                      </>
+                    )}
+                    {activeTab === 'pharmacies' && (
+                      <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+                    )}
+                    {activeTab === 'reports' && (
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 10l-5 5-5-5M12 15V3"/>
+                    )}
+                  </svg>
+                  {activeTab === 'reports' ? 'Analytics & Reports' : `${activeTab.charAt(0).toUpperCase() + activeTab.slice(1)} Management`}
+                </h2>
+                {activeTab !== 'reports' && activeTab !== 'suppliers' && activeTab !== 'customers' && (
+                  <button
+                    className="admin-add-button"
+                    onClick={() => {
+                      if (activeTab === 'pharmacies') {
+                        setFormData({
+                          address: {},
+                          contact: {},
+                          license: {}
+                        });
+                      } else {
+                        setFormData({});
+                      }
+                      setShowAddModal(true);
+                    }}
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <line x1="12" y1="5" x2="12" y2="19"/>
+                      <line x1="5" y1="12" x2="19" y2="12"/>
+                    </svg>
+                    Add {activeTab.slice(0, -1)}
+                  </button>
+                )}
               </div>
 
-              {loading ? (
-                <div className="admin-loading-container">
-                  <div className="admin-loading-spinner"></div>
-                  <p>Loading {activeTab}...</p>
-                </div>
+              {activeTab === 'reports' ? (
+                <AdminReportsPage />
+              ) : activeTab === 'suppliers' ? (
+                <SuppliersPage />
+              ) : activeTab === 'customers' ? (
+                <CustomersPage />
               ) : (
-                renderTable()
+                <div className="admin-management-container">
+                  <div className="admin-search-bar">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="11" cy="11" r="8"/>
+                      <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                    </svg>
+                    <input 
+                      type="text" 
+                      placeholder={`Search ${activeTab}...`} 
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)} 
+                    />
+                  </div>
+
+                  {loading ? (
+                    <div className="admin-loading-container">
+                      <div className="admin-loading-spinner"></div>
+                      <p>Loading {activeTab}...</p>
+                    </div>
+                  ) : (
+                    renderTable()
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -1005,7 +1555,6 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
         showAddModal, setShowAddModal, showEditModal, setShowEditModal,
         activeTab, formErrors, handleAdd, handleUpdate, renderFormFields
       )}
-      </div>
     </div>
   );
 };

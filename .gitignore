@@ -69,21 +69,27 @@ mongodb/
 .eslintcache
 .parcel-cache
 
+# Test coverage
+coverage/
+*/coverage/
+backend/coverage/
+
 # EXCLUDE EVERYTHING EXCEPT MAIN FOLDERS
 /*
 !/backend/
 !/frontend/
-!/ml-backend/
+!/ai/
 !/.gitignore
 !/README.md
-!/package.json
+!/tests/
 
 # Exclude vite-project
 vite-project/
 
-# Exclude all documentation and batch files
+# Exclude all documentation and batch files except README
 *.md
 !README.md
+!tests/README.md
 *.bat
 *.txt
 test-rbac.html

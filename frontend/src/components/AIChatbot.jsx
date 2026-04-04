@@ -133,7 +133,7 @@ ${aiAvailable ? '✅ AI Assistant is online' : '⚠️ AI Assistant is offline (
       }
 
       const inStock = products.filter(p => p.quantity > 0).length;
-      const lowStock = products.filter(p => p.quantity > 0 && p.quantity <= (p.reorderLevel || 10)).length;
+      const lowStock = products.filter(p => p.quantity > 0 && p.quantity <= (p.reorderLevel || 50)).length;
       const outOfStock = products.filter(p => p.quantity === 0).length;
 
       return `**Inventory Summary**
@@ -157,22 +157,37 @@ Would you like to see low stock items or expiring items?`;
       let products = await res.json();
       if (!Array.isArray(products)) products = [];
 
-      const lowStock = products.filter(p => p.quantity > 0 && p.quantity <= (p.reorderLevel || 10));
+      // Get all items that need attention (quantity <= reorderLevel)
+      const needsAttention = products.filter(p => p.quantity <= (p.reorderLevel || 50));
+      const outOfStock = needsAttention.filter(p => p.quantity === 0);
+      const lowStock = needsAttention.filter(p => p.quantity > 0);
 
-      if (lowStock.length === 0) {
+      if (needsAttention.length === 0) {
         return "Great news! No items are currently low on stock.";
       }
 
-      let response = `**Low Stock Alert** (${lowStock.length} items)\n\n`;
-      lowStock.slice(0, 5).forEach(item => {
-        response += `• ${item.name}\n  Stock: ${item.quantity} | Price: Rs${parseFloat(item.price).toFixed(2)}\n\n`;
-      });
-
-      if (lowStock.length > 5) {
-        response += `...and ${lowStock.length - 5} more items.\n\n`;
+      let response = `**Stock Alert** (${needsAttention.length} items need attention)\n\n`;
+      
+      if (outOfStock.length > 0) {
+        response += `🔴 **Out of Stock** (${outOfStock.length} items)\n`;
+        outOfStock.slice(0, 3).forEach(item => {
+          response += `• ${item.name} - URGENT REORDER\n`;
+        });
+        response += '\n';
+      }
+      
+      if (lowStock.length > 0) {
+        response += `🟡 **Low Stock** (${lowStock.length} items)\n`;
+        lowStock.slice(0, 3).forEach(item => {
+          response += `• ${item.name} - Stock: ${item.quantity}\n`;
+        });
       }
 
-      response += "Tip: Type 'reorder suggestions' to see what to order!";
+      if (needsAttention.length > 6) {
+        response += `\n...and ${needsAttention.length - 6} more items.\n`;
+      }
+
+      response += "\nTip: Type 'reorder suggestions' to see what to order!";
       return response;
     } catch (error) {
       return "Unable to fetch low stock items. Please try again.";

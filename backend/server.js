@@ -1585,222 +1585,8 @@ app.get("/api/test-fulfill", (req, res) => {
   res.json({ message: "Test endpoint working" });
 });
 
-// GET Product by QR Code Data
-app.post("/api/products/qr-lookup", authenticateToken, async (req, res) => {
-  try {
-    console.log("🔍 QR Lookup request:", req.body);
-    
-    const { qrData } = req.body;
-    let product = null;
-    
-    if (!qrData) {
-      return res.status(400).json({ 
-        success: false,
-        message: 'QR data is required',
-        qrData: qrData
-      });
-    }
-    
-    // Parse QR data
-    if (typeof qrData === 'string') {
-      try {
-        // Try to parse as JSON first
-        const parsedData = JSON.parse(qrData);
-        console.log("📦 Parsed QR data:", parsedData);
-        
-        if (parsedData.id) {
-          // First check if the ID is actually a batch number format
-          if (typeof parsedData.id === 'string' && !parsedData.id.match(/^[0-9a-fA-F]{24}$/)) {
-            // Looks like a batch number, not MongoDB ID
-            product = await Product.findOne({ batchNumber: parsedData.id }).populate('supplier');
-            console.log("🔍 Found product by parsed ID as batch number:", product ? product.name : 'Not found');
-          } else {
-            // Try as MongoDB ID
-            try {
-              product = await Product.findById(parsedData.id).populate('supplier');
-              console.log("🔍 Found product by parsed ID:", product ? product.name : 'Not found');
-            } catch (idError) {
-              console.log("❌ MongoDB ID search failed, trying as batch number:", idError.message);
-              // Fallback to batch number search
-              product = await Product.findOne({ batchNumber: parsedData.id }).populate('supplier');
-              console.log("🔍 Found product by parsed ID as batch number (fallback):", product ? product.name : 'Not found');
-            }
-          }
-        }
-      } catch (parseError) {
-        console.log("📝 QR data is not JSON, trying different search methods:", qrData);
-        
-        // Method 1: Try as MongoDB ObjectID
-        if (qrData.match(/^[0-9a-fA-F]{24}$/)) {
-          try {
-            product = await Product.findById(qrData).populate('supplier');
-            console.log("🔍 Found product by MongoDB ID:", product ? product.name : 'Not found');
-          } catch (idError) {
-            console.log("❌ MongoDB ID search failed:", idError.message);
-          }
-        }
-        
-        // Method 2: Try as batch number (NEW!)
-        if (!product) {
-          try {
-            product = await Product.findOne({ batchNumber: qrData }).populate('supplier');
-            console.log("🔍 Found product by batch number:", product ? product.name : 'Not found');
-          } catch (batchError) {
-            console.log("❌ Batch number search failed:", batchError.message);
-          }
-        }
-        
-        // Method 3: Try as product name
-        if (!product) {
-          try {
-            product = await Product.findOne({ name: { $regex: qrData, $options: 'i' } }).populate('supplier');
-            console.log("🔍 Found product by name search:", product ? product.name : 'Not found');
-          } catch (nameError) {
-            console.log("❌ Name search failed:", nameError.message);
-          }
-        }
-      }
-    } else if (qrData.productId) {
-      // Direct product ID
-      product = await Product.findById(qrData.productId).populate('supplier');
-      console.log("🔍 Found product by productId field:", product ? product.name : 'Not found');
-    } else if (qrData.id) {
-      // QR data object with ID
-      product = await Product.findById(qrData.id).populate('supplier');
-      console.log("🔍 Found product by id field:", product ? product.name : 'Not found');
-    } else if (qrData.batchNumber) {
-      // QR data object with batch number
-      product = await Product.findOne({ batchNumber: qrData.batchNumber }).populate('supplier');
-      console.log("🔍 Found product by batch number field:", product ? product.name : 'Not found');
-    }
-    
-    if (!product) {
-      console.log("❌ Product not found for QR data:", qrData);
-      return res.status(404).json({ 
-        success: false,
-        message: 'Product not found. Try using batch number (e.g., VIT-518940) or MongoDB ID.',
-        qrData: qrData,
-        searchedFor: typeof qrData === 'string' ? qrData : JSON.stringify(qrData),
-        hint: 'Use batch numbers like VIT-518940, PAR-943247, etc.'
-      });
-    }
-    
-    console.log("✅ Product found:", product.name, "- Batch:", product.batchNumber);
-    res.json({
-      success: true,
-      product: product,
-      message: `Product found: ${product.name} (Batch: ${product.batchNumber})`
-    });
-    
-  } catch (error) {
-    console.error("❌ Error in QR lookup:", error);
-    res.status(500).json({ 
-      success: false,
-      message: "Error looking up product by QR code", 
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
-
-// POST Add Product to Inventory via QR
-app.post("/api/products/qr-add", authenticateToken, async (req, res) => {
-  try {
-    console.log("📦 QR Add to inventory request:", req.body);
-    
-    const { qrData, quantity = 1 } = req.body;
-    let product = null;
-    
-    // Parse QR data to find product (UPDATED to support batch numbers)
-    if (typeof qrData === 'string') {
-      try {
-        const parsedData = JSON.parse(qrData);
-        if (parsedData.id) {
-          // First check if the ID is actually a batch number format
-          if (typeof parsedData.id === 'string' && !parsedData.id.match(/^[0-9a-fA-F]{24}$/)) {
-            // Looks like a batch number, not MongoDB ID
-            product = await Product.findOne({ batchNumber: parsedData.id });
-            console.log("🔍 Found product by parsed ID as batch number for add:", product ? product.name : 'Not found');
-          } else {
-            // Try as MongoDB ID
-            try {
-              product = await Product.findById(parsedData.id);
-              console.log("🔍 Found product by parsed ID for add:", product ? product.name : 'Not found');
-            } catch (idError) {
-              console.log("❌ MongoDB ID search failed, trying as batch number:", idError.message);
-              // Fallback to batch number search
-              product = await Product.findOne({ batchNumber: parsedData.id });
-              console.log("🔍 Found product by parsed ID as batch number (fallback) for add:", product ? product.name : 'Not found');
-            }
-          }
-        } else if (parsedData.batchNumber) {
-          product = await Product.findOne({ batchNumber: parsedData.batchNumber });
-        }
-      } catch (parseError) {
-        console.log("📝 QR data is not JSON, trying different search methods:", qrData);
-        
-        // Method 1: Try as MongoDB ObjectID
-        if (qrData.match(/^[0-9a-fA-F]{24}$/)) {
-          try {
-            product = await Product.findById(qrData);
-            console.log("🔍 Found product by MongoDB ID for add:", product ? product.name : 'Not found');
-          } catch (idError) {
-            console.log("❌ MongoDB ID search failed:", idError.message);
-          }
-        }
-        
-        // Method 2: Try as batch number (NEW!)
-        if (!product) {
-          try {
-            product = await Product.findOne({ batchNumber: qrData });
-            console.log("🔍 Found product by batch number for add:", product ? product.name : 'Not found');
-          } catch (batchError) {
-            console.log("❌ Batch number search failed:", batchError.message);
-          }
-        }
-      }
-    } else if (qrData.productId) {
-      product = await Product.findById(qrData.productId);
-    } else if (qrData.id) {
-      product = await Product.findById(qrData.id);
-    } else if (qrData.batchNumber) {
-      product = await Product.findOne({ batchNumber: qrData.batchNumber });
-    }
-    
-    if (!product) {
-      return res.status(404).json({ 
-        success: false,
-        message: 'Product not found for QR code. Try using batch number (e.g., VIT-518940)',
-        qrData: qrData,
-        hint: 'Use batch numbers like VIT-518940, PAR-943247, etc.'
-      });
-    }
-    
-    // Update product quantity
-    const oldQuantity = product.quantity;
-    product.quantity += parseInt(quantity);
-    await product.save();
-    
-    console.log(`✅ Updated ${product.name} (Batch: ${product.batchNumber}): ${oldQuantity} → ${product.quantity}`);
-    
-    res.json({
-      success: true,
-      product: product,
-      message: `Added ${quantity} units of ${product.name} (Batch: ${product.batchNumber}). New stock: ${product.quantity}`,
-      oldQuantity: oldQuantity,
-      newQuantity: product.quantity,
-      addedQuantity: parseInt(quantity)
-    });
-    
-  } catch (error) {
-    console.error("❌ Error adding product via QR:", error);
-    res.status(500).json({ 
-      success: false,
-      message: "Error adding product to inventory", 
-      error: error.message 
-    });
-  }
-});
+// Note: QR lookup and add routes are handled via apiRoutes -> productRoutes -> productController
+// These were previously duplicated here and resulted in logic conflicts.
 
 // GET All Orders
 app.get("/api/orders", authenticateToken, async (req, res) => {
@@ -1948,6 +1734,143 @@ app.post("/api/orders", authenticateToken, async (req, res) => {
   } catch (error) {
     console.error("Error creating order:", error);
     res.status(500).json({ message: "Error creating order", error: error.message });
+  }
+});
+
+// ==================== ESEWA PAYMENT ENDPOINTS (V2) ====================
+
+// POST Initiate eSewa Payment
+app.post("/api/payments/initiate-esewa", authenticateToken, async (req, res) => {
+  try {
+    const crypto = require("crypto");
+    const { customerName, items } = req.body;
+    const { ESEWA_MERCHANT_ID, ESEWA_SECRET_KEY, SERVER_URL } = process.env;
+
+    let totalAmount = 0;
+    const orderItems = [];
+    
+    for (const item of items) {
+      const product = await Product.findById(item.product);
+      if (!product) return res.status(404).json({ message: `Product not found: ${item.product}` });
+      
+      const priceToUse = product.isPromoted && product.discountPercentage > 0 
+        ? product.price * (1 - product.discountPercentage / 100) 
+        : product.price;
+
+      const subtotal = priceToUse * item.quantity;
+      totalAmount += subtotal;
+      
+      orderItems.push({
+        product: product._id,
+        productName: product.name,
+        quantity: item.quantity,
+        price: product.price,
+        discountPercentage: product.isPromoted ? product.discountPercentage : 0,
+        appliedPrice: priceToUse,
+        subtotal: subtotal
+      });
+    }
+
+    const orderCount = await Order.countDocuments();
+    const transaction_uuid = `ORD-ESW-${Date.now()}-${orderCount + 1001}`;
+
+    const newOrder = new Order({
+      orderNumber: transaction_uuid,
+      customerName,
+      items: orderItems,
+      totalAmount,
+      paymentMethod: 'Online',
+      status: 'Pending',
+      processedBy: req.user.id
+    });
+    await newOrder.save();
+
+    // Generate Signature for V2
+    // FORMAT: total_amount=100.0,transaction_uuid=123,product_code=EPAYTEST
+    // NOTE: totalAmount MUST have 1 decimal place or no decimal places if it's an integer? 
+    // Actually, eSewa V2 is picky about decimals. I'll use the exact totalAmount.
+    const signatureString = `total_amount=${totalAmount},transaction_uuid=${transaction_uuid},product_code=${ESEWA_MERCHANT_ID}`;
+    const signature = crypto
+      .createHmac("sha256", ESEWA_SECRET_KEY)
+      .update(signatureString)
+      .digest("base64");
+
+    const paymentParams = {
+      amount: totalAmount,
+      tax_amount: 0,
+      total_amount: totalAmount,
+      transaction_uuid,
+      product_code: ESEWA_MERCHANT_ID,
+      product_service_charge: 0,
+      product_delivery_charge: 0,
+      success_url: `${SERVER_URL}/api/payments/verify-esewa`,
+      failure_url: `${SERVER_URL}/api/payments/verify-esewa?status=failed`,
+      signed_field_names: "total_amount,transaction_uuid,product_code",
+      signature
+    };
+
+    console.log("🛡️ Signature Generated:", signature);
+    res.status(200).json({ paymentParams });
+
+  } catch (error) {
+    console.error("❌ eSewa Initiation Error:", error);
+    res.status(500).json({ message: "Error initiating payment", error: error.message });
+  }
+});
+
+// GET Verify eSewa Payment (Callback Handler)
+app.get("/api/payments/verify-esewa", async (req, res) => {
+  const { data } = req.query; // Epay V2 returns encoded 'data'
+  const { CLIENT_URL } = process.env;
+
+  if (!data) {
+    // Check if it's a failure redirect with status=failed
+    if (req.query.status === 'failed') {
+      return res.redirect(`${CLIENT_URL}/dashboard?esewa=failed&error=cancelled`);
+    }
+    return res.redirect(`${CLIENT_URL}/dashboard?esewa=failed&error=no_data`);
+  }
+
+  try {
+    // Decode eSewa V2 data (Base64 JSON)
+    const decodedData = JSON.parse(Buffer.from(data, 'base64').toString('utf-8'));
+    console.log("🔗 eSewa Decoded Callback Data:", decodedData);
+
+    const { status, transaction_uuid, transaction_code, total_amount } = decodedData;
+
+    if (status === 'COMPLETE') {
+      const order = await Order.findOne({ orderNumber: transaction_uuid });
+      if (order && order.status === 'Pending') {
+        order.status = 'Completed';
+        order.paymentDetails = { transaction_code, total_amount };
+        order.completedAt = new Date();
+        await order.save();
+
+        const newSale = new Sale({
+          order: order._id,
+          totalAmount: order.totalAmount,
+          paymentMethod: 'Online',
+          items: order.items,
+          processedBy: order.processedBy
+        });
+        await newSale.save();
+
+        for (const item of order.items) {
+          const product = await Product.findById(item.product);
+          if (product) {
+            product.quantity -= item.quantity;
+            await product.save();
+          }
+        }
+      }
+      return res.redirect(`${CLIENT_URL}/dashboard?esewa=success&oid=${transaction_uuid}`);
+    } else {
+      console.error("❌ eSewa verification failed. Status:", status);
+      return res.redirect(`${CLIENT_URL}/dashboard?esewa=failed&error=${status}`);
+    }
+  } catch (error) {
+    console.error("❌ eSewa verification error:", error);
+    return res.redirect(`${CLIENT_URL}/dashboard?esewa=failed&error=server_error`);
   }
 });
 

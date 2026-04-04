@@ -13,8 +13,13 @@ export default function SalesChart({ salesData }) {
           <ResponsiveContainer width="100%" height={350}>
             <LineChart data={salesData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e0e0e0" />
-              <XAxis dataKey="month" stroke="#666" />
-              <YAxis stroke="#666" />
+              <XAxis 
+                dataKey="month" 
+                stroke="#666"
+                domain={['dataMin', 'dataMax']}
+                allowDataOverflow={false}
+              />
+              <YAxis stroke="#666" domain={[0, 'dataMax + 100']} />
               <Tooltip 
                 contentStyle={{ 
                   backgroundColor: '#fff', 

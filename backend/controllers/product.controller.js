@@ -111,23 +111,63 @@ exports.deleteProduct = async (req, res) => {
   }
 };
 
+// Helper function to robustly parse QR data
+const parseQRData = (data) => {
+  if (typeof data === 'object' && data !== null) return data;
+  if (typeof data !== 'string') return null;
+
+  const cleanData = data.trim();
+  
+  // Try standard JSON parse
+  try { return JSON.parse(cleanData); } catch (e) {}
+
+  // Try to fix common "pseudo-JSON" issues (single quotes, etc)
+  try {
+    const fixedJson = cleanData
+      .replace(/'/g, '"') // Replace single quotes with double quotes
+      .replace(/(\w+):/g, '"$1":'); // Quote unquoted keys
+    return JSON.parse(fixedJson);
+  } catch (e) {}
+
+  return null;
+};
+
 // QR Code lookup
 exports.qrLookup = async (req, res) => {
   try {
-    const { qrData } = req.body;
+    const { qrData: rawData } = req.body;
+    const qrData = parseQRData(rawData);
+    const rawString = typeof rawData === 'string' ? rawData : '';
+    
+    let product = null;
 
-    // Try to find product by batch number or name
-    const product = await Product.findOne({
-      $or: [
-        { batchNumber: qrData },
-        { name: { $regex: qrData, $options: 'i' } }
-      ]
-    }).populate('supplier');
+    // 1. Try by ID (Object or String)
+    const idToTry = (qrData && qrData.id) ? qrData.id : (rawString.match(/^[0-9a-fA-F]{24}$/) ? rawString : null);
+    if (idToTry) {
+      try { product = await Product.findById(idToTry).populate('supplier'); } catch (e) {}
+    }
+
+    // 2. Try by Batch Number from Object
+    if (!product && qrData && qrData.batchNumber) {
+      product = await Product.findOne({ batchNumber: qrData.batchNumber }).populate('supplier');
+    }
+
+    // 3. Fallback: Try raw input as batch number or name (Only if it's a string)
+    if (!product && rawString) {
+      const cleanRawString = rawString.trim().replace(/\n/g, '').replace(/\r/g, '');
+      product = await Product.findOne({
+        $or: [
+          { batchNumber: cleanRawString },
+          { name: { $regex: cleanRawString, $options: 'i' } }
+        ]
+      }).populate('supplier');
+    }
 
     if (!product) {
       return res.status(404).json({ 
         success: false,
-        message: 'Product not found' 
+        message: 'Product not found',
+        receivedData: rawData
       });
     }
 
@@ -148,20 +188,39 @@ exports.qrLookup = async (req, res) => {
 // QR Add to inventory
 exports.qrAddToInventory = async (req, res) => {
   try {
-    const { qrData, quantity } = req.body;
+    const { qrData: rawData, quantity } = req.body;
+    const qrData = parseQRData(rawData);
+    const rawString = typeof rawData === 'string' ? rawData : '';
+    
+    let product = null;
 
-    // Find product
-    const product = await Product.findOne({
-      $or: [
-        { batchNumber: qrData },
-        { name: { $regex: qrData, $options: 'i' } }
-      ]
-    });
+    // 1. Try by ID
+    const idToTry = (qrData && qrData.id) ? qrData.id : (rawString.match(/^[0-9a-fA-F]{24}$/) ? rawString : null);
+    if (idToTry) {
+      try { product = await Product.findById(idToTry); } catch (e) {}
+    }
+
+    // 2. Try by Batch Number from Object
+    if (!product && qrData && qrData.batchNumber) {
+      product = await Product.findOne({ batchNumber: qrData.batchNumber });
+    }
+
+    // 3. Fallback search (Only if it's a string)
+    if (!product && rawString) {
+      const cleanRawString = rawString.trim().replace(/\n/g, '').replace(/\r/g, '');
+      product = await Product.findOne({
+        $or: [
+          { batchNumber: cleanRawString },
+          { name: { $regex: cleanRawString, $options: 'i' } }
+        ]
+      });
+    }
 
     if (!product) {
       return res.status(404).json({ 
         success: false,
-        message: 'Product not found' 
+        message: 'Product not found',
+        receivedData: rawData
       });
     }
 
