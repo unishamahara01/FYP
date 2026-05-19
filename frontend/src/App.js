@@ -6,7 +6,6 @@ import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import Dashboard from './pages/Dashboard';
 import AdminDashboard from './pages/AdminDashboard';
-import StaffDashboard from './pages/StaffDashboard';
 import ReportsPage from './pages/ReportsPage';
 import AccountSettings from './pages/AccountSettings';
 import MedicineDetail from './pages/MedicineDetail';
@@ -150,9 +149,7 @@ function App() {
     
     return (
       <div className="App">
-        {user.role === 'Staff' ? (
-          <StaffDashboard onLogout={handleLogout} onAccountSettings={handleAccountSettings} />
-        ) : user.role === 'Admin' ? (
+        {user.role === 'Admin' ? (
           <AdminDashboard onLogout={handleLogout} onAccountSettings={handleAccountSettings} />
         ) : (
           <Dashboard onLogout={handleLogout} onAccountSettings={handleAccountSettings} userRole={user.role} />

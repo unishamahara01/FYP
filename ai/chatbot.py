@@ -17,7 +17,8 @@ class MedicineChatbot:
         if self.api_key and self.api_key != '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':
             try:
                 genai.configure(api_key=self.api_key)
-                self.model = genai.GenerativeModel('gemini-pro')
+                # Use gemini-1.5-flash instead of deprecated gemini-pro
+                self.model = genai.GenerativeModel('gemini-1.5-flash')
                 self.api_available = True
                 print("Google Gemini API configured successfully")
             except Exception as e:

@@ -68,6 +68,12 @@ export const authAPI = {
       body: JSON.stringify(data)
     }),
 
+  googleSignIn: (credential) =>
+    apiCall(`${API_BASE_URL}/auth/google/verify`, {
+      method: 'POST',
+      body: JSON.stringify({ credential })
+    }),
+
   logout: () =>
     apiCall(`${API_BASE_URL}/auth/logout`, {
       method: 'POST'

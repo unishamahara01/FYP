@@ -205,7 +205,6 @@ export default function LoginPage({ onSwitchToSignup, onLogin, onBackToLanding, 
               >
                 <option value="Pharmacist">Pharmacist</option>
                 <option value="Admin">Admin</option>
-                <option value="Staff">Staff</option>
               </select>
             </div>
 

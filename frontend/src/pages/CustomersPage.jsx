@@ -156,8 +156,9 @@ export default function CustomersPage() {
                 <th>Phone</th>
                 <th>Email</th>
                 <th>City</th>
-                <th>Gender</th>
-                <th>Allergies</th>
+                <th>Loyalty Points</th>
+                <th>Tier</th>
+                <th>Total Purchases</th>
                 <th>Last Visit</th>
                 <th>Actions</th>
               </tr>
@@ -165,7 +166,7 @@ export default function CustomersPage() {
             <tbody>
               {customers.length === 0 ? (
                 <tr>
-                  <td colSpan="8" style={{textAlign: 'center', padding: '40px'}}>
+                  <td colSpan="9" style={{textAlign: 'center', padding: '40px'}}>
                     No customers found. Click "Add Customer" to get started.
                   </td>
                 </tr>
@@ -176,8 +177,26 @@ export default function CustomersPage() {
                     <td>{customer.phone}</td>
                     <td>{customer.email || 'N/A'}</td>
                     <td>{customer.address?.city || 'N/A'}</td>
-                    <td>{customer.gender}</td>
-                    <td>{customer.allergies || 'None'}</td>
+                    <td>
+                      <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+                        <span style={{fontSize: '18px', fontWeight: 'bold', color: '#667eea'}}>
+                          {customer.loyaltyPoints || 0}
+                        </span>
+                        <span style={{fontSize: '12px', color: '#64748b'}}>
+                          (Rs {Math.floor((customer.loyaltyPoints || 0) / 100) * 10})
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <span className={`tier-badge ${(customer.loyaltyTier || 'Bronze').toLowerCase()}`}>
+                        {customer.loyaltyTier === 'Platinum' && '💎'}
+                        {customer.loyaltyTier === 'Gold' && '🥇'}
+                        {customer.loyaltyTier === 'Silver' && '🥈'}
+                        {customer.loyaltyTier === 'Bronze' && '🥉'}
+                        {customer.loyaltyTier || 'Bronze'}
+                      </span>
+                    </td>
+                    <td>Rs {(customer.totalPurchases || 0).toLocaleString()}</td>
                     <td>{customer.lastVisit ? new Date(customer.lastVisit).toLocaleDateString() : 'Never'}</td>
                     <td>
                       <div className="action-buttons">

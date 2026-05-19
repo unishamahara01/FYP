@@ -217,7 +217,7 @@ app.post("/api/auth/register", [
   body("fullName").trim().isLength({ min: 2 }).withMessage("Full name must be at least 2 characters"),
   body("email").isEmail().withMessage("Please provide a valid email"),
   body("password").isLength({ min: 6 }).withMessage("Password must be at least 6 characters"),
-  body("role").isIn(["Pharmacist", "Admin", "Staff"]).withMessage("Invalid role")
+  body("role").isIn(["Pharmacist", "Admin"]).withMessage("Invalid role")
 ], async (req, res) => {
   try {
     // Check for validation errors
@@ -243,8 +243,6 @@ app.post("/api/auth/register", [
       permissions = ["view_all", "edit_all", "delete_all", "manage_users", "view_reports", "manage_inventory"];
     } else if (role === "Pharmacist") {
       permissions = ["view_inventory", "edit_inventory", "view_orders", "process_orders", "view_reports"];
-    } else if (role === "Staff") {
-      permissions = ["view_inventory", "view_orders"];
     }
 
     // Create new user (password will be hashed by User model pre-save middleware)
@@ -345,7 +343,7 @@ app.post("/api/auth/signup", [
   body("name").notEmpty().withMessage("Name is required"),
   body("email").isEmail().withMessage("Please provide a valid email"),
   body("password").isLength({ min: 6 }).withMessage("Password must be at least 6 characters"),
-  body("role").optional().isIn(['Admin', 'Pharmacist', 'Staff']).withMessage("Invalid role")
+  body("role").optional().isIn(['Admin', 'Pharmacist']).withMessage("Invalid role")
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -366,7 +364,7 @@ app.post("/api/auth/signup", [
       fullName: name,
       email, 
       password, 
-      role: role || 'Staff',
+      role: role || 'Pharmacist',
       status: 'Active'
     });
     await user.save();
@@ -583,11 +581,8 @@ app.post("/api/auth/reset-password", [
       return res.status(404).json({ message: "User not found" });
     }
 
-    // Hash new password
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    
-    // Update password
-    user.password = hashedPassword;
+    // Update password (pre-save hook will hash it automatically)
+    user.password = newPassword;
     await user.save();
 
     // Mark reset code as used
@@ -749,7 +744,7 @@ app.post("/api/admin/users", authenticateToken, authorizeRole("Admin"), [
   body("fullName").trim().isLength({ min: 2 }),
   body("email").isEmail(),
   body("password").isLength({ min: 6 }),
-  body("role").isIn(["Pharmacist", "Admin", "Staff"])
+  body("role").isIn(["Pharmacist", "Admin"])
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -774,8 +769,6 @@ app.post("/api/admin/users", authenticateToken, authorizeRole("Admin"), [
       permissions = ["view_all", "edit_all", "delete_all", "manage_users", "view_reports", "manage_inventory"];
     } else if (role === "Pharmacist") {
       permissions = ["view_inventory", "edit_inventory", "view_orders", "process_orders", "view_reports"];
-    } else if (role === "Staff") {
-      permissions = ["view_inventory", "view_orders"];
     }
 
     const newUser = new User({
@@ -825,7 +818,7 @@ app.delete("/api/admin/users/:id", authenticateToken, authorizeRole("Admin"), as
 app.put("/api/admin/users/:id", authenticateToken, authorizeRole("Admin"), [
   body("fullName").optional().trim().isLength({ min: 2 }),
   body("email").optional().isEmail(),
-  body("role").optional().isIn(["Pharmacist", "Admin", "Staff"])
+  body("role").optional().isIn(["Pharmacist", "Admin"])
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -860,8 +853,6 @@ app.put("/api/admin/users/:id", authenticateToken, authorizeRole("Admin"), [
         user.permissions = ["view_all", "edit_all", "delete_all", "manage_users", "view_reports", "manage_inventory"];
       } else if (role === "Pharmacist") {
         user.permissions = ["view_inventory", "edit_inventory", "view_orders", "process_orders", "view_reports"];
-      } else if (role === "Staff") {
-        user.permissions = ["view_inventory", "view_orders"];
       }
     }
 
@@ -1085,7 +1076,8 @@ app.get("/api/inventory/low-stock", authenticateToken, async (req, res) => {
       quantity: { $lte: LOW_STOCK_THRESHOLD }
     }).sort({ quantity: 1 });
     
-    const outOfStock = lowStockProducts.filter(p => p.quantity === 0);
+    // Filter out expired products - only show Out of Stock (not Expired)
+    const outOfStock = lowStockProducts.filter(p => p.quantity === 0 && p.status !== 'Expired');
     const lowStock = lowStockProducts.filter(p => p.quantity > 0);
     
     res.json({
@@ -1629,9 +1621,9 @@ app.post("/api/orders", authenticateToken, async (req, res) => {
         });
       }
       
-      const priceToUse = product.isPromoted && product.discountPercentage > 0 
-        ? product.price * (1 - product.discountPercentage / 100) 
-        : product.price;
+      // Use regular price - no automatic discounts
+      // Discounts should only be applied manually by pharmacist for expiring products
+      const priceToUse = product.price;
 
       const subtotal = priceToUse * item.quantity;
       totalAmount += subtotal;
@@ -1641,7 +1633,7 @@ app.post("/api/orders", authenticateToken, async (req, res) => {
         productName: product.name,
         quantity: item.quantity,
         price: product.price,
-        discountPercentage: product.isPromoted ? product.discountPercentage : 0,
+        discountPercentage: 0, // No automatic discounts
         appliedPrice: priceToUse,
         subtotal: subtotal
       });
@@ -1753,9 +1745,9 @@ app.post("/api/payments/initiate-esewa", authenticateToken, async (req, res) => 
       const product = await Product.findById(item.product);
       if (!product) return res.status(404).json({ message: `Product not found: ${item.product}` });
       
-      const priceToUse = product.isPromoted && product.discountPercentage > 0 
-        ? product.price * (1 - product.discountPercentage / 100) 
-        : product.price;
+      // Use regular price - no automatic discounts
+      // Discounts should only be applied manually by pharmacist for expiring products
+      const priceToUse = product.price;
 
       const subtotal = priceToUse * item.quantity;
       totalAmount += subtotal;
@@ -1765,7 +1757,7 @@ app.post("/api/payments/initiate-esewa", authenticateToken, async (req, res) => 
         productName: product.name,
         quantity: item.quantity,
         price: product.price,
-        discountPercentage: product.isPromoted ? product.discountPercentage : 0,
+        discountPercentage: 0, // No automatic discounts
         appliedPrice: priceToUse,
         subtotal: subtotal
       });
@@ -1818,59 +1810,177 @@ app.post("/api/payments/initiate-esewa", authenticateToken, async (req, res) => 
   }
 });
 
+// POST Retry eSewa Payment for Pending Orders
+app.post("/api/payments/retry-esewa", authenticateToken, async (req, res) => {
+  try {
+    const crypto = require("crypto");
+    const { orderId, orderNumber, totalAmount } = req.body;
+    const { ESEWA_MERCHANT_ID, ESEWA_SECRET_KEY, SERVER_URL } = process.env;
+
+    // Verify order exists and is pending
+    const order = await Order.findById(orderId);
+    if (!order) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+    
+    if (order.status !== 'Pending') {
+      return res.status(400).json({ message: "Order is not pending" });
+    }
+
+    // Generate NEW transaction UUID for retry (eSewa doesn't allow duplicate UUIDs)
+    const transaction_uuid = `${orderNumber}-RETRY-${Date.now()}`;
+    
+    // Update order with new transaction UUID
+    order.orderNumber = transaction_uuid;
+    await order.save();
+
+    // Generate Signature for V2
+    const signatureString = `total_amount=${totalAmount},transaction_uuid=${transaction_uuid},product_code=${ESEWA_MERCHANT_ID}`;
+    const signature = crypto
+      .createHmac("sha256", ESEWA_SECRET_KEY)
+      .update(signatureString)
+      .digest("base64");
+
+    const formData = {
+      amount: totalAmount,
+      tax_amount: 0,
+      total_amount: totalAmount,
+      transaction_uuid,
+      product_code: ESEWA_MERCHANT_ID,
+      product_service_charge: 0,
+      product_delivery_charge: 0,
+      success_url: `${SERVER_URL}/api/payments/verify-esewa`,
+      failure_url: `${SERVER_URL}/api/payments/verify-esewa?status=failed`,
+      signed_field_names: "total_amount,transaction_uuid,product_code",
+      signature
+    };
+
+    console.log("🔄 Payment Retry for Order:", orderNumber);
+    console.log("🛡️ Signature Generated:", signature);
+    res.status(200).json({ formData });
+
+  } catch (error) {
+    console.error("❌ eSewa Retry Error:", error);
+    res.status(500).json({ message: "Error retrying payment", error: error.message });
+  }
+});
+
 // GET Verify eSewa Payment (Callback Handler)
 app.get("/api/payments/verify-esewa", async (req, res) => {
-  const { data } = req.query; // Epay V2 returns encoded 'data'
+  console.log("\n========================================");
+  console.log("🔔 eSewa CALLBACK RECEIVED");
+  console.log("========================================");
+  console.log("Full URL:", req.url);
+  console.log("Query params:", JSON.stringify(req.query, null, 2));
+  
+  const { data } = req.query;
   const { CLIENT_URL } = process.env;
 
   if (!data) {
-    // Check if it's a failure redirect with status=failed
+    console.log("❌ NO DATA in callback");
     if (req.query.status === 'failed') {
+      console.log("⚠️ Status=failed - User cancelled payment");
       return res.redirect(`${CLIENT_URL}/dashboard?esewa=failed&error=cancelled`);
     }
+    console.log("⚠️ No data and no status - Unknown error");
     return res.redirect(`${CLIENT_URL}/dashboard?esewa=failed&error=no_data`);
   }
 
   try {
-    // Decode eSewa V2 data (Base64 JSON)
+    console.log("🔓 Decoding base64 data...");
+    console.log("Raw data:", data);
+    
     const decodedData = JSON.parse(Buffer.from(data, 'base64').toString('utf-8'));
-    console.log("🔗 eSewa Decoded Callback Data:", decodedData);
+    console.log("✅ Decoded successfully:");
+    console.log(JSON.stringify(decodedData, null, 2));
 
     const { status, transaction_uuid, transaction_code, total_amount } = decodedData;
+    
+    console.log("\n📋 Payment Details:");
+    console.log("  Status:", status);
+    console.log("  Transaction UUID:", transaction_uuid);
+    console.log("  Transaction Code:", transaction_code);
+    console.log("  Total Amount:", total_amount);
 
     if (status === 'COMPLETE') {
+      console.log("\n✅ Payment status is COMPLETE");
+      console.log("🔍 Searching for order:", transaction_uuid);
+      
       const order = await Order.findOne({ orderNumber: transaction_uuid });
-      if (order && order.status === 'Pending') {
+      
+      if (!order) {
+        console.error("❌ ORDER NOT FOUND in database!");
+        console.error("Searched for orderNumber:", transaction_uuid);
+        return res.redirect(`${CLIENT_URL}/dashboard?esewa=failed&error=order_not_found`);
+      }
+      
+      console.log("✅ Order found!");
+      console.log("  Order ID:", order._id);
+      console.log("  Order Number:", order.orderNumber);
+      console.log("  Current Status:", order.status);
+      console.log("  Total Amount:", order.totalAmount);
+      
+      if (order.status === 'Pending') {
+        console.log("\n💾 Updating order...");
         order.status = 'Completed';
         order.paymentDetails = { transaction_code, total_amount };
         order.completedAt = new Date();
         await order.save();
+        console.log("✅ Order status updated to Completed");
 
+        console.log("\n💰 Creating sale record...");
+        const saleDate = new Date();
         const newSale = new Sale({
           order: order._id,
-          totalAmount: order.totalAmount,
+          amount: order.totalAmount,
+          date: saleDate,
+          month: saleDate.toLocaleString('default', { month: 'long' }),
+          year: saleDate.getFullYear(),
           paymentMethod: 'Online',
-          items: order.items,
           processedBy: order.processedBy
         });
         await newSale.save();
+        console.log("✅ Sale record created");
 
+        console.log("\n📦 Updating inventory...");
         for (const item of order.items) {
           const product = await Product.findById(item.product);
           if (product) {
+            const oldQty = product.quantity;
             product.quantity -= item.quantity;
             await product.save();
+            console.log(`  ✅ ${product.name}: ${oldQty} → ${product.quantity}`);
           }
         }
+        console.log("✅ Inventory updated");
+      } else {
+        console.log("⚠️ Order already processed (status:", order.status + ")");
       }
+      
+      console.log("\n🎉 SUCCESS! Redirecting to success page...");
+      console.log("========================================\n");
       return res.redirect(`${CLIENT_URL}/dashboard?esewa=success&oid=${transaction_uuid}`);
+      
     } else {
-      console.error("❌ eSewa verification failed. Status:", status);
-      return res.redirect(`${CLIENT_URL}/dashboard?esewa=failed&error=${status}`);
+      console.error("\n❌ Payment status is NOT COMPLETE");
+      console.error("Status received:", status);
+      console.error("========================================\n");
+      return res.redirect(`${CLIENT_URL}/dashboard?esewa=failed&error=${status.toLowerCase()}`);
     }
+    
   } catch (error) {
-    console.error("❌ eSewa verification error:", error);
-    return res.redirect(`${CLIENT_URL}/dashboard?esewa=failed&error=server_error`);
+    console.error("\n❌❌❌ EXCEPTION CAUGHT ❌❌❌");
+    console.error("Error type:", error.name);
+    console.error("Error message:", error.message);
+    console.error("Stack trace:");
+    console.error(error.stack);
+    console.error("========================================\n");
+    
+    const errorType = error.message.includes('JSON') ? 'invalid_data' : 
+                      error.message.includes('Order') ? 'order_not_found' : 
+                      'server_error';
+    
+    return res.redirect(`${CLIENT_URL}/dashboard?esewa=failed&error=${errorType}`);
   }
 });
 

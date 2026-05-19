@@ -250,7 +250,6 @@ export default function SignupPage({ onSwitchToLogin, onSignup, onBackToLanding 
                 <option value="">Select a role</option>
                 <option value="Pharmacist">Pharmacist</option>
                 <option value="Admin">Admin</option>
-                <option value="Staff">Staff</option>
               </select>
               {errors.role && <span className="error-message">{errors.role}</span>}
             </div>

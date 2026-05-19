@@ -43,7 +43,7 @@ exports.getOrderById = async (req, res) => {
 // Create order
 exports.createOrder = async (req, res) => {
   try {
-    const { customer, customerName, items, paymentMethod, prescriptionRequired } = req.body;
+    const { customer, customerName, items, paymentMethod, prescriptionRequired, pointsToRedeem } = req.body;
 
     // Calculate total
     let totalAmount = 0;
@@ -56,6 +56,23 @@ exports.createOrder = async (req, res) => {
         return res.status(404).json({ 
           success: false,
           message: `Product not found: ${item.product}` 
+        });
+      }
+
+      // Check if product is expired
+      if (product.status === 'Expired') {
+        return res.status(400).json({ 
+          success: false,
+          message: `Cannot order expired product: ${product.name}. Please remove from order.` 
+        });
+      }
+
+      // Check expiry date directly
+      const daysUntilExpiry = Math.ceil((new Date(product.expiryDate) - new Date()) / (1000 * 60 * 60 * 24));
+      if (daysUntilExpiry < 0) {
+        return res.status(400).json({ 
+          success: false,
+          message: `Product ${product.name} has expired. Cannot process order.` 
         });
       }
 
@@ -80,6 +97,35 @@ exports.createOrder = async (req, res) => {
       // Reduce stock
       product.quantity -= item.quantity;
       await product.save();
+    }
+
+    // Handle loyalty points redemption
+    let pointsDiscount = 0;
+    let pointsRedeemed = 0;
+    
+    if (customer && pointsToRedeem && pointsToRedeem > 0) {
+      const Customer = require('../models/Customer');
+      const customerDoc = await Customer.findById(customer);
+      
+      if (customerDoc && customerDoc.loyaltyPoints >= pointsToRedeem) {
+        // 100 points = Rs 10 discount
+        pointsDiscount = Math.floor(pointsToRedeem / 100) * 10;
+        pointsRedeemed = Math.floor(pointsToRedeem / 100) * 100;
+        
+        // Apply discount
+        totalAmount = Math.max(0, totalAmount - pointsDiscount);
+        
+        // Deduct points
+        customerDoc.loyaltyPoints -= pointsRedeemed;
+        customerDoc.totalPointsRedeemed += pointsRedeemed;
+        customerDoc.pointsHistory.push({
+          type: 'redeemed',
+          points: -pointsRedeemed,
+          description: `Redeemed ${pointsRedeemed} points for Rs ${pointsDiscount} discount`,
+          date: new Date()
+        });
+        await customerDoc.save();
+      }
     }
 
     // Generate order number
@@ -114,10 +160,40 @@ exports.createOrder = async (req, res) => {
 
     await sale.save();
 
+    // Award loyalty points (1 point per Rs 100 spent)
+    let pointsEarned = 0;
+    if (customer) {
+      const Customer = require('../models/Customer');
+      const customerDoc = await Customer.findById(customer);
+      
+      if (customerDoc) {
+        pointsEarned = Math.floor(totalAmount / 100);
+        
+        customerDoc.loyaltyPoints += pointsEarned;
+        customerDoc.totalPointsEarned += pointsEarned;
+        customerDoc.totalPurchases += totalAmount;
+        customerDoc.lastVisit = new Date();
+        customerDoc.pointsHistory.push({
+          type: 'earned',
+          points: pointsEarned,
+          orderId: order._id,
+          description: `Earned ${pointsEarned} points from purchase of Rs ${totalAmount}`,
+          date: new Date()
+        });
+        
+        await customerDoc.save();
+      }
+    }
+
     res.status(201).json({
       success: true,
       message: 'Order created successfully',
-      order
+      order,
+      loyaltyInfo: {
+        pointsEarned,
+        pointsRedeemed,
+        pointsDiscount
+      }
     });
   } catch (error) {
     console.error('Error creating order:', error);
