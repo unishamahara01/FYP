@@ -8,8 +8,6 @@ const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const session = require("express-session");
 const { OAuth2Client } = require("google-auth-library");
 const nodemailer = require("nodemailer");
-const { spawn } = require("child_process");
-const path = require("path");
 require("dotenv").config();
 
 // Import database connection and User model
