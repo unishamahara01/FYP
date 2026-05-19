@@ -23,9 +23,6 @@ const app = express();
 // Connect to MongoDB
 connectDB();
 
-// Google OAuth Client
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-
 // Middleware
 app.use(cors({
   origin: ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3005", "http://localhost:3006"],
@@ -410,6 +407,11 @@ app.get("/api/auth/google/callback",
 // Google Token Verification (for frontend Google Sign-In)
 app.post("/api/auth/google/verify", async (req, res) => {
   try {
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      return res.status(400).json({ message: "Google OAuth not configured" });
+    }
+    
+    const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
     const { credential } = req.body;
     
     // Verify the Google token
