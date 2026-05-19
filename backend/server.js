@@ -3000,63 +3000,12 @@ app.use((req, res) => {
 
 const PORT = process.env.PORT || 3001;
 
-// Start AI Backend automatically
-let aiProcess = null;
-
-function startAIBackend() {
-  console.log("🤖 Starting AI Backend...");
-  
-  const aiPath = path.join(__dirname, "..", "ai");
-  
-  // Check if Python is available
-  aiProcess = spawn("python", ["app.py"], {
-    cwd: aiPath,
-    stdio: "inherit",
-    shell: true
-  });
-  
-  aiProcess.on("error", (err) => {
-    console.log("⚠️  AI Backend failed to start:", err.message);
-    console.log("   AI features will not be available");
-    console.log("   To enable AI: cd ai && pip install -r requirements.txt && python app.py");
-  });
-  
-  aiProcess.on("exit", (code) => {
-    if (code !== 0 && code !== null) {
-      console.log(`⚠️  AI Backend exited with code ${code}`);
-    }
-  });
-  
-  console.log("✅ AI Backend starting on http://localhost:5001");
-}
-
-// Graceful shutdown
-process.on("SIGINT", () => {
-  console.log("\n🛑 Shutting down servers...");
-  if (aiProcess) {
-    aiProcess.kill();
-  }
-  process.exit(0);
-});
-
-process.on("SIGTERM", () => {
-  if (aiProcess) {
-    aiProcess.kill();
-  }
-  process.exit(0);
-});
-
 app.listen(PORT, () => {
   console.log("=".repeat(50));
   console.log(`🚀 MediTrust Backend Server running on port ${PORT}`);
   console.log(`   Health check: http://localhost:${PORT}`);
   console.log(`   API Base URL: http://localhost:${PORT}/api`);
   console.log("=".repeat(50));
-  
-  // Start AI Backend
-  startAIBackend();
-  
-  console.log("=".repeat(50));
-  console.log("✅ All services started!");
+  console.log("✅ Backend service started!");
   console.log("=".repeat(50));
 });
