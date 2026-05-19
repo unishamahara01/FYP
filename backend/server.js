@@ -61,13 +61,14 @@ const emailTransporter = nodemailer.createTransport({
   },
 });
 
-// Passport Google OAuth Strategy
-passport.use(new GoogleStrategy({
-  clientID: process.env.GOOGLE_CLIENT_ID,
-  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-  callbackURL: "/api/auth/google/callback"
-}, async (accessToken, refreshToken, profile, done) => {
-  try {
+// Passport Google OAuth Strategy (only if credentials are provided)
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+  passport.use(new GoogleStrategy({
+    clientID: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    callbackURL: "/api/auth/google/callback"
+  }, async (accessToken, refreshToken, profile, done) => {
+    try {
     // Check if user already exists with Google ID
     let user = await User.findOne({ googleId: profile.id });
     
@@ -104,7 +105,8 @@ passport.use(new GoogleStrategy({
   } catch (error) {
     return done(error, null);
   }
-}));
+  }));
+}
 
 passport.serializeUser((user, done) => {
   done(null, user._id);
