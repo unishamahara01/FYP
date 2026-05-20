@@ -1,7 +1,12 @@
 {
-  "buildCommand": "npm run build",
+  "buildCommand": "REACT_APP_API_URL=https://meditrust-backend-48uj.onrender.com/api npm run build",
   "outputDirectory": "build",
   "framework": "create-react-app",
+  "build": {
+    "env": {
+      "REACT_APP_API_URL": "https://meditrust-backend-48uj.onrender.com/api"
+    }
+  },
   "headers": [
     {
       "source": "/static/(.*)",
