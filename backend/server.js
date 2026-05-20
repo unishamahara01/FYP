@@ -25,14 +25,7 @@ connectDB();
 
 // Middleware
 app.use(cors({
-  origin: [
-    "http://localhost:3000", 
-    "http://localhost:3001", 
-    "http://localhost:3002", 
-    "http://localhost:3005", 
-    "http://localhost:3006",
-    "https://fyp-bq6d.vercel.app"
-  ],
+  origin: true, // Allow all origins in production
   credentials: true
 }));
 app.use(express.json());
