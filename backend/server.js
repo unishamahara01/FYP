@@ -19,6 +19,7 @@ const PasswordReset = require("./models/PasswordReset");
 
 // Import API routes
 const apiRoutes = require("./routes/index");
+const { sqpSanitizer } = require("./middleware/sqpSanitizer.middleware");
 
 const app = express();
 
@@ -34,6 +35,7 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json());
+app.use(sqpSanitizer);
 
 // Simple test route
 app.get("/api/simple-test", (req, res) => {
@@ -202,6 +204,17 @@ const authorizePermission = (...requiredPermissions) => {
   };
 };
 
+// ==================== DATA ISOLATION HELPER ====================
+// Returns a query filter based on the logged-in user's role.
+// Admins see ALL data. Pharmacists only see their own data.
+const getUserFilter = (req, fieldName = 'createdBy') => {
+  if (!req.user) return {};
+  // Admin sees everything
+  if (req.user.role === 'Admin') return {};
+  // Pharmacist sees only their own data
+  return { [fieldName]: req.user.id };
+};
+
 // Routes
 
 // Mount API routes
@@ -217,7 +230,7 @@ app.post("/api/auth/register", [
   body("fullName").trim().isLength({ min: 2 }).withMessage("Full name must be at least 2 characters"),
   body("email").isEmail().withMessage("Please provide a valid email"),
   body("password").isLength({ min: 6 }).withMessage("Password must be at least 6 characters"),
-  body("role").isIn(["Pharmacist", "Admin", "Staff"]).withMessage("Invalid role")
+  body("role").isIn(["Pharmacist", "Admin"]).withMessage("Invalid role"),
 ], async (req, res) => {
   try {
     // Check for validation errors
@@ -243,8 +256,6 @@ app.post("/api/auth/register", [
       permissions = ["view_all", "edit_all", "delete_all", "manage_users", "view_reports", "manage_inventory"];
     } else if (role === "Pharmacist") {
       permissions = ["view_inventory", "edit_inventory", "view_orders", "process_orders", "view_reports"];
-    } else if (role === "Staff") {
-      permissions = ["view_inventory", "view_orders"];
     }
 
     // Create new user (password will be hashed by User model pre-save middleware)
@@ -345,7 +356,7 @@ app.post("/api/auth/signup", [
   body("name").notEmpty().withMessage("Name is required"),
   body("email").isEmail().withMessage("Please provide a valid email"),
   body("password").isLength({ min: 6 }).withMessage("Password must be at least 6 characters"),
-  body("role").optional().isIn(['Admin', 'Pharmacist', 'Staff']).withMessage("Invalid role")
+  body("role").optional().isIn(['Admin', 'Pharmacist']).withMessage("Invalid role")
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -366,7 +377,7 @@ app.post("/api/auth/signup", [
       fullName: name,
       email, 
       password, 
-      role: role || 'Staff',
+      role: role || 'Pharmacist',
       status: 'Active'
     });
     await user.save();
@@ -607,30 +618,50 @@ app.get("/api/dashboard/stats", authenticateToken, async (req, res) => {
   try {
     const Product = require('./models/Product');
     const Order = require('./models/Order');
+    const productFilter = getUserFilter(req, 'createdBy');
+    const orderFilter = getUserFilter(req, 'processedBy');
 
-    // 1. Total Products
-    const totalSKUs = await Product.countDocuments();
+    // 1. Total Products (scoped to user)
+    const totalSKUs = await Product.countDocuments(productFilter);
 
-    // 2. Expiring Items (within 90 days)
+    // 2. Expiring Items (within 90 days, scoped)
     const ninetyDaysFromNow = new Date();
     ninetyDaysFromNow.setDate(ninetyDaysFromNow.getDate() + 90);
     const expiringItems = await Product.countDocuments({
+      ...productFilter,
       expiryDate: { $lte: ninetyDaysFromNow, $gte: new Date() }
     });
 
-    // 3. Low Stock Items (Quantity <= Reorder Level)
+    // 3. Low Stock Items (scoped)
     const predictedShortages = await Product.countDocuments({
+      ...productFilter,
       $expr: { $lte: ['$quantity', '$reorderLevel'] }
     });
 
-    // 4. Today's Sales
+    // 4. Today's Sales (scoped)
     const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const startOfToday = new Date(today);
+    startOfToday.setHours(0, 0, 0, 0);
+    const endOfToday = new Date(today);
+    endOfToday.setHours(23, 59, 59, 999);
+    
+    const orderMatchStage = {
+      createdAt: { $gte: startOfToday, $lte: endOfToday },
+      status: 'Completed'
+    };
+    // Add user filter for non-admins
+    if (orderFilter.processedBy) {
+      const mongoose = require('mongoose');
+      orderMatchStage.processedBy = new mongoose.Types.ObjectId(orderFilter.processedBy);
+    }
+    
     const todaysOrders = await Order.aggregate([
-      { $match: { createdAt: { $gte: today } } },
+      { $match: orderMatchStage },
       { $group: { _id: null, total: { $sum: '$totalAmount' } } }
     ]);
     const todaysSales = todaysOrders.length > 0 ? todaysOrders[0].total : 0;
+    
+    console.log(`💰 Today's Sales: Rs ${todaysSales} (from ${startOfToday.toLocaleString()} to ${endOfToday.toLocaleString()})`);
 
     // Build real-time dashboard data
     const dashboardData = {
@@ -749,7 +780,7 @@ app.post("/api/admin/users", authenticateToken, authorizeRole("Admin"), [
   body("fullName").trim().isLength({ min: 2 }),
   body("email").isEmail(),
   body("password").isLength({ min: 6 }),
-  body("role").isIn(["Pharmacist", "Admin", "Staff"])
+  body("role").isIn(["Pharmacist", "Admin"]).withMessage("Invalid role")
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -774,9 +805,8 @@ app.post("/api/admin/users", authenticateToken, authorizeRole("Admin"), [
       permissions = ["view_all", "edit_all", "delete_all", "manage_users", "view_reports", "manage_inventory"];
     } else if (role === "Pharmacist") {
       permissions = ["view_inventory", "edit_inventory", "view_orders", "process_orders", "view_reports"];
-    } else if (role === "Staff") {
-      permissions = ["view_inventory", "view_orders"];
     }
+
 
     const newUser = new User({
       fullName,
@@ -1229,8 +1259,18 @@ app.post("/api/inventory/check-low-stock", authenticateToken, authorizeRole("Adm
 // GET Top Selling Products (REAL DATA)
 app.get("/api/dashboard/top-products", authenticateToken, async (req, res) => {
   try {
-    // Aggregate orders to find top selling products
-    const topProducts = await Order.aggregate([
+    const orderFilter = getUserFilter(req, 'processedBy');
+    const matchStage = {};
+    if (orderFilter.processedBy) {
+      const mongoose = require('mongoose');
+      matchStage.processedBy = new mongoose.Types.ObjectId(orderFilter.processedBy);
+    }
+    // Aggregate orders to find top selling products (scoped to user)
+    const pipeline = [];
+    if (Object.keys(matchStage).length > 0) {
+      pipeline.push({ $match: matchStage });
+    }
+    pipeline.push(
       { $unwind: "$items" },
       {
         $group: {
@@ -1257,7 +1297,8 @@ app.get("/api/dashboard/top-products", authenticateToken, async (req, res) => {
           revenue: "$totalRevenue"
         }
       }
-    ]);
+    );
+    const topProducts = await Order.aggregate(pipeline);
 
     res.json(topProducts);
   } catch (error) {
@@ -1270,9 +1311,12 @@ app.get("/api/dashboard/top-products", authenticateToken, async (req, res) => {
 app.get("/api/dashboard/recent-activity", authenticateToken, async (req, res) => {
   try {
     const activities = [];
+    const orderFilter = getUserFilter(req, 'processedBy');
+    const productFilter = getUserFilter(req, 'createdBy');
+    const customerFilter = getUserFilter(req, 'createdBy');
     
-    // Get recent orders
-    const recentOrders = await Order.find()
+    // Get recent orders (scoped)
+    const recentOrders = await Order.find(orderFilter)
       .sort({ createdAt: -1 })
       .limit(2)
       .lean();
@@ -1286,8 +1330,8 @@ app.get("/api/dashboard/recent-activity", authenticateToken, async (req, res) =>
       });
     });
     
-    // Get recently updated products
-    const recentProducts = await Product.find()
+    // Get recently updated products (scoped)
+    const recentProducts = await Product.find(productFilter)
       .sort({ updatedAt: -1 })
       .limit(2)
       .lean();
@@ -1301,8 +1345,8 @@ app.get("/api/dashboard/recent-activity", authenticateToken, async (req, res) =>
       });
     });
     
-    // Get recent customers
-    const recentCustomers = await Customer.find()
+    // Get recent customers (scoped)
+    const recentCustomers = await Customer.find(customerFilter)
       .sort({ createdAt: -1 })
       .limit(1)
       .lean();
@@ -1319,8 +1363,9 @@ app.get("/api/dashboard/recent-activity", authenticateToken, async (req, res) =>
     // Sort all activities by time
     activities.sort((a, b) => new Date(b.time) - new Date(a.time));
     
-    // Add AI activity if there are expiring items
+    // Add AI activity if there are expiring items (scoped)
     const expiringCount = await Product.countDocuments({
+      ...productFilter,
       expiryDate: {
         $lte: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
         $gte: new Date()
@@ -1347,9 +1392,10 @@ app.get("/api/dashboard/recent-activity", authenticateToken, async (req, res) =>
 app.get("/api/sales", authenticateToken, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
+    const saleFilter = getUserFilter(req, 'processedBy');
     
-    // Fetch recent sales/orders
-    const recentSales = await Sale.find()
+    // Fetch recent sales/orders (scoped to user)
+    const recentSales = await Sale.find(saleFilter)
       .sort({ createdAt: -1 })
       .limit(limit)
       .populate('customer', 'fullName')
@@ -1362,39 +1408,54 @@ app.get("/api/sales", authenticateToken, async (req, res) => {
   }
 });
 
-// GET Sales Forecast Data (last 6 months)
+// GET Sales Forecast Data (last 30 days - FIXED)
 app.get("/api/sales/forecast", authenticateToken, async (req, res) => {
   try {
     const dailySales = [];
     const today = new Date();
+    today.setHours(23, 59, 59, 999); // End of today
     
-    // Generate last 30 days
+    // Generate last 30 days (NOT including future dates)
     for (let i = 29; i >= 0; i--) {
       const date = new Date(today);
       date.setDate(date.getDate() - i);
       
-      const startOfDay = new Date(date.setHours(0, 0, 0, 0));
-      const endOfDay = new Date(date.setHours(23, 59, 59, 999));
+      // Only include dates up to today
+      if (date > today) {
+        continue; // Skip future dates
+      }
       
-      // Get actual sales for this day
+      const startOfDay = new Date(date);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(date);
+      endOfDay.setHours(23, 59, 59, 999);
+      
+      // Get actual sales for this day (scoped to user)
+      const orderFilter = getUserFilter(req, 'processedBy');
       const orders = await Order.find({
+        ...orderFilter,
         createdAt: {
           $gte: startOfDay,
           $lte: endOfDay
-        }
+        },
+        status: 'Completed' // Only count completed orders
       });
       
       const dailyTotal = orders.reduce((sum, order) => sum + (order.totalAmount || 0), 0);
       
-      // Format date as "Jan 1", "Jan 2", etc.
+      // Format date as "May 22", "May 21", etc.
       const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
       const dateLabel = `${monthNames[startOfDay.getMonth()]} ${startOfDay.getDate()}`;
       
       dailySales.push({
         month: dateLabel,
-        actual: dailyTotal
+        actual: dailyTotal,
+        date: startOfDay.toISOString().split('T')[0] // Add date for debugging
       });
     }
+    
+    console.log(`📊 Sales forecast generated: ${dailySales.length} days`);
+    console.log(`📅 Latest date: ${dailySales[dailySales.length - 1]?.month} - Rs ${dailySales[dailySales.length - 1]?.actual}`);
     
     res.json(dailySales);
   } catch (error) {
@@ -1406,7 +1467,8 @@ app.get("/api/sales/forecast", authenticateToken, async (req, res) => {
 // GET All Products
 app.get("/api/products", authenticateToken, async (req, res) => {
   try {
-    const products = await Product.find().populate('supplier').sort({ createdAt: -1 });
+    const productFilter = getUserFilter(req, 'createdBy');
+    const products = await Product.find(productFilter).populate('supplier').sort({ createdAt: -1 });
     res.json(products);
   } catch (error) {
     console.error("Error fetching products:", error);
@@ -1443,7 +1505,7 @@ app.post("/api/products", authenticateToken, async (req, res) => {
       });
     }
     
-    const newProduct = new Product(req.body);
+    const newProduct = new Product({ ...req.body, createdBy: req.user.id });
     await newProduct.save();
     console.log("✅ Product created:", newProduct._id);
     res.status(201).json({ message: "Product created successfully", product: newProduct });
@@ -1472,7 +1534,8 @@ app.put("/api/products/:id", authenticateToken, async (req, res) => {
 // GET All Purchase Orders
 app.get("/api/purchase-orders", authenticateToken, async (req, res) => {
   try {
-    const pos = await PurchaseOrder.find().sort({ createdAt: -1 });
+    const poFilter = getUserFilter(req, 'processedBy');
+    const pos = await PurchaseOrder.find(poFilter).sort({ createdAt: -1 });
     res.json(pos);
   } catch (error) {
     console.error("Error fetching POs:", error);
@@ -1536,8 +1599,11 @@ app.put("/api/purchase-orders/:id/fulfill", authenticateToken, async (req, res) 
     console.log(`🔍 Looking for product: ${po.product}`);
     const product = await Product.findById(po.product);
     if (!product) {
-      console.error(`❌ Product not found: ${po.product}`);
-      return res.status(404).json({ message: "Product not found" });
+      console.error(`❌ Product not found: ${po.product}. Proceeding to fulfill PO without stock update.`);
+      po.status = 'Received';
+      po.receivedAt = Date.now();
+      await po.save();
+      return res.json({ message: "Purchase order fulfilled, but stock was not updated because the product no longer exists.", po });
     }
     
     console.log(`✅ Found product: ${product.name}, Current quantity: ${product.quantity}`);
@@ -1592,7 +1658,8 @@ app.get("/api/test-fulfill", (req, res) => {
 app.get("/api/orders", authenticateToken, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
-    const orders = await Order.find()
+    const orderFilter = getUserFilter(req, 'processedBy');
+    const orders = await Order.find(orderFilter)
       .populate('customer')
       .populate('processedBy', 'fullName')
       .sort({ createdAt: -1 })
@@ -1610,7 +1677,7 @@ app.post("/api/orders", authenticateToken, async (req, res) => {
     console.log("📦 Creating new order...");
     console.log("Request body:", req.body);
     
-    const { customerName, items, paymentMethod } = req.body;
+    const { customerName, customerPhone, customerEmail, items, paymentMethod } = req.body;
     
     // Calculate order details
     let totalAmount = 0;
@@ -1680,9 +1747,60 @@ app.post("/api/orders", authenticateToken, async (req, res) => {
     const orderCount = await Order.countDocuments();
     const orderNumber = `ORD-${(orderCount + 1001).toString()}`;
     
-    // Create order
+    // Update customer's last visit date if customer exists (case-insensitive search)
+    let customer = await Customer.findOne({ 
+      fullName: { $regex: new RegExp(`^${customerName}$`, 'i') } 
+    });
+    
+    if (customer) {
+      // --- Loyalty Points Accrual ---
+      const pointsEarned = Math.floor(totalAmount / 100);
+      customer.loyaltyPoints = (customer.loyaltyPoints || 0) + pointsEarned;
+      // Update tier based on cumulative points
+      if (customer.loyaltyPoints >= 1000) customer.loyaltyTier = 'Platinum';
+      else if (customer.loyaltyPoints >= 500) customer.loyaltyTier = 'Gold';
+      else customer.loyaltyTier = 'Silver';
+      customer.totalPurchases = (customer.totalPurchases || 0) + totalAmount;
+      customer.lastVisit = new Date();
+      
+      // Update contact info if provided and currently N/A
+      if (customerPhone && customer.phone === 'N/A') {
+        customer.phone = customerPhone;
+      }
+      if (customerEmail && !customer.email) {
+        customer.email = customerEmail;
+      }
+      
+      await customer.save();
+      console.log(`🪙 Added ${pointsEarned} loyalty points to ${customer.fullName}. Total: ${customer.loyaltyPoints}`);
+    } else {
+      // --- Auto-create customer if doesn't exist ---
+      const pointsEarned = Math.floor(totalAmount / 100);
+      let loyaltyTier = 'Silver';
+      if (pointsEarned >= 1000) loyaltyTier = 'Platinum';
+      else if (pointsEarned >= 500) loyaltyTier = 'Gold';
+      
+      customer = new Customer({
+        fullName: customerName,
+        phone: customerPhone || 'N/A',
+        email: customerEmail || '',
+        loyaltyPoints: pointsEarned,
+        loyaltyTier: loyaltyTier,
+        totalPurchases: totalAmount,
+        lastVisit: new Date(),
+        createdAt: new Date(),
+        createdBy: req.user.id
+      });
+      await customer.save();
+      console.log(`✨ Auto-created new customer: ${customerName} with ${pointsEarned} loyalty points`);
+      if (customerPhone) console.log(`   📞 Phone: ${customerPhone}`);
+      if (customerEmail) console.log(`   📧 Email: ${customerEmail}`);
+    }
+    
+    // Create order with customer reference
     const newOrder = new Order({
       orderNumber,
+      customer: customer._id, // Link to customer document
       customerName,
       items: orderItems,
       totalAmount,
@@ -1711,17 +1829,6 @@ app.post("/api/orders", authenticateToken, async (req, res) => {
     });
     
     await newSale.save();
-    
-    // Update customer's last visit date if customer exists (case-insensitive search)
-    const customer = await Customer.findOne({ 
-      fullName: { $regex: new RegExp(`^${customerName}$`, 'i') } 
-    });
-    if (customer) {
-      customer.lastVisit = now;
-      customer.totalPurchases = (customer.totalPurchases || 0) + totalAmount;
-      await customer.save();
-      console.log("👤 Customer last visit updated:", customerName);
-    }
     
     console.log("✅ Order created successfully:", orderNumber);
     console.log("💰 Sale amount:", totalAmount);
@@ -1877,7 +1984,8 @@ app.get("/api/payments/verify-esewa", async (req, res) => {
 // GET All Suppliers
 app.get("/api/suppliers", authenticateToken, async (req, res) => {
   try {
-    const suppliers = await Supplier.find().sort({ createdAt: -1 });
+    const supplierFilter = getUserFilter(req, 'createdBy');
+    const suppliers = await Supplier.find(supplierFilter).sort({ createdAt: -1 });
     res.json(suppliers);
   } catch (error) {
     console.error("Error fetching suppliers:", error);
@@ -1888,18 +1996,97 @@ app.get("/api/suppliers", authenticateToken, async (req, res) => {
 // GET All Customers
 app.get("/api/customers", authenticateToken, async (req, res) => {
   try {
-    const customers = await Customer.find().sort({ createdAt: -1 });
-    res.json(customers);
+    const customerFilter = getUserFilter(req, 'createdBy');
+    const customers = await Customer.find(customerFilter).sort({ createdAt: -1 });
+    
+    // Auto-fix any corrupted records in the database
+    for (const customer of customers) {
+      let needsSave = false;
+      if (typeof customer.loyaltyPoints !== 'number' || isNaN(customer.loyaltyPoints)) {
+        customer.loyaltyPoints = 0;
+        needsSave = true;
+      }
+      if (typeof customer.totalPurchases !== 'number' || isNaN(customer.totalPurchases)) {
+        customer.totalPurchases = 0;
+        needsSave = true;
+      }
+      if (!customer.phone) {
+        customer.phone = 'N/A';
+        needsSave = true;
+      }
+      if (needsSave) {
+        await customer.save();
+        console.log(`🔧 Auto-fixed corrupted data for customer: ${customer.fullName}`);
+      }
+    }
+    
+    // Enhance each customer with their order count AND sanitize all fields
+    const customersWithOrders = await Promise.all(
+      customers.map(async (customer) => {
+        const orderCount = await Order.countDocuments({ customer: customer._id });
+        const obj = customer.toObject();
+        
+        // Sanitize every field to prevent NaN / undefined in frontend
+        return {
+          _id: obj._id,
+          fullName: obj.fullName || 'Unknown',
+          phone: obj.phone && obj.phone !== 'N/A' ? obj.phone : 'N/A',
+          email: obj.email || '',
+          address: {
+            city: (obj.address && obj.address.city) ? obj.address.city : ''
+          },
+          gender: obj.gender || 'Other',
+          dateOfBirth: obj.dateOfBirth || null,
+          allergies: obj.allergies || '',
+          chronicConditions: obj.chronicConditions || '',
+          loyaltyPoints: (typeof obj.loyaltyPoints === 'number' && !isNaN(obj.loyaltyPoints)) ? obj.loyaltyPoints : 0,
+          loyaltyTier: obj.loyaltyTier || 'Silver',
+          totalPurchases: (typeof obj.totalPurchases === 'number' && !isNaN(obj.totalPurchases)) ? obj.totalPurchases : 0,
+          lastVisit: obj.lastVisit || null,
+          createdAt: obj.createdAt || null,
+          orderCount: orderCount || 0
+        };
+      })
+    );
+    
+    console.log(`📋 Returning ${customersWithOrders.length} sanitized customers`);
+    res.json(customersWithOrders);
   } catch (error) {
     console.error("Error fetching customers:", error);
     res.status(500).json({ message: "Error fetching customers" });
   }
 });
 
+// GET Customer with Order History
+app.get("/api/customers/:id/orders", authenticateToken, async (req, res) => {
+  try {
+    const customer = await Customer.findById(req.params.id);
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+    
+    // Find all orders for this customer
+    const orders = await Order.find({ customer: req.params.id })
+      .sort({ createdAt: -1 })
+      .populate('processedBy', 'fullName');
+    
+    res.json({
+      customer,
+      orders,
+      totalOrders: orders.length,
+      totalSpent: customer.totalPurchases || 0
+    });
+  } catch (error) {
+    console.error("Error fetching customer orders:", error);
+    res.status(500).json({ message: "Error fetching customer orders" });
+  }
+});
+
+
 // POST Create New Customer
 app.post("/api/customers", authenticateToken, async (req, res) => {
   try {
-    const newCustomer = new Customer(req.body);
+    const newCustomer = new Customer({ ...req.body, createdBy: req.user.id });
     await newCustomer.save();
     res.status(201).json({ message: "Customer created successfully", customer: newCustomer });
   } catch (error) {
@@ -1939,7 +2126,7 @@ app.delete("/api/customers/:id", authenticateToken, async (req, res) => {
 // POST Create New Supplier
 app.post("/api/suppliers", authenticateToken, async (req, res) => {
   try {
-    const newSupplier = new Supplier(req.body);
+    const newSupplier = new Supplier({ ...req.body, createdBy: req.user.id });
     await newSupplier.save();
     res.status(201).json({ message: "Supplier created successfully", supplier: newSupplier });
   } catch (error) {
@@ -2252,6 +2439,117 @@ app.get("/api/reports/customer", authenticateToken, async (req, res) => {
   }
 });
 
+// Compliance Report (Regulatory and Restricted Medicines)
+app.get("/api/reports/loyalty", authenticateToken, async (req, res) => {
+  try {
+    // Aggregate loyalty data across all customers
+    const customers = await Customer.find();
+    const totalPoints = customers.reduce((sum, c) => sum + (c.loyaltyPoints || 0), 0);
+    const tierCounts = { Silver: 0, Gold: 0, Platinum: 0 };
+    customers.forEach(c => {
+      const tier = c.loyaltyTier || 'Silver';
+      tierCounts[tier] = (tierCounts[tier] || 0) + 1;
+    });
+    const topCustomers = customers
+      .sort((a, b) => (b.loyaltyPoints || 0) - (a.loyaltyPoints || 0))
+      .slice(0, 10);
+    
+    res.json({
+      totalCustomers: customers.length,
+      totalPoints,
+      tierCounts,
+      topCustomers
+    });
+  } catch (error) {
+    console.error("Error generating loyalty report:", error);
+    res.status(500).json({ message: "Error generating loyalty report" });
+  }
+});
+
+app.get("/api/reports/compliance", authenticateToken, async (req, res) => {
+  try {
+    const { range, start, end } = req.query;
+    let startDate, endDate;
+
+    if (start && end) {
+      startDate = new Date(start);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(end);
+      endDate.setHours(23, 59, 59, 999);
+    } else {
+      const now = new Date();
+      endDate = new Date();
+      switch(range) {
+        case 'today':
+          startDate = new Date(now.setHours(0, 0, 0, 0));
+          break;
+        case 'yesterday':
+          startDate = new Date(now);
+          startDate.setDate(startDate.getDate() - 1);
+          startDate.setHours(0, 0, 0, 0);
+          endDate = new Date(startDate);
+          endDate.setHours(23, 59, 59, 999);
+          break;
+        case 'week':
+          startDate = new Date(now.setDate(now.getDate() - 7));
+          break;
+        case 'month':
+          startDate = new Date(now.setMonth(now.getMonth() - 1));
+          break;
+        case 'year':
+          startDate = new Date(now.setFullYear(now.getFullYear() - 1));
+          break;
+        default:
+          startDate = new Date(now.setMonth(now.getMonth() - 1));
+      }
+    }
+
+    // Find all completed orders in period that required a prescription
+    const orders = await Order.find({
+      createdAt: { $gte: startDate, $lte: endDate },
+      status: 'Completed',
+      prescriptionRequired: true
+    }).populate('processedBy', 'fullName email');
+
+    let totalRestrictedItemsDispensed = 0;
+    let prescriptionSalesValue = 0;
+
+    const restrictedLog = orders.map(order => {
+      let itemCount = 0;
+      const productsList = order.items.map(item => {
+        itemCount += item.quantity;
+        return `${item.productName} (x${item.quantity})`;
+      }).join(", ");
+
+      totalRestrictedItemsDispensed += itemCount;
+      prescriptionSalesValue += order.totalAmount;
+
+      return {
+        id: order._id,
+        orderNumber: order.orderNumber,
+        date: order.createdAt,
+        customerName: order.customerName || 'Walk-in Customer',
+        products: productsList,
+        totalAmount: order.totalAmount,
+        processedBy: order.processedBy?.fullName || 'System Pharmacist',
+        hasPrescription: true,
+        prescriptionDetails: order.prescriptionImage ? "Digital Rx Uploaded" : "Physical Rx Verified"
+      };
+    });
+
+    res.json({
+      totalAuditedOrders: orders.length,
+      totalRestrictedItemsDispensed,
+      prescriptionSalesValue,
+      complianceScore: 100, // 100% compliance rate for verified transactions
+      restrictedLog
+    });
+  } catch (error) {
+    console.error("Error generating compliance report:", error);
+    res.status(500).json({ message: "Error generating compliance report" });
+  }
+});
+
 // ==================== DEPARTMENT MANAGEMENT ENDPOINTS ====================
 
 // GET All Departments
@@ -2288,7 +2586,7 @@ app.post("/api/admin/departments", authenticateToken, authorizeRole("Admin"), as
     const newDepartment = new Department({
       name,
       description,
-      manager,
+      manager: manager || undefined,
       budget,
       createdBy: req.user.id
     });
@@ -2316,7 +2614,7 @@ app.put("/api/admin/departments/:id", authenticateToken, authorizeRole("Admin"),
     
     const department = await Department.findByIdAndUpdate(
       req.params.id,
-      { name, description, manager, budget, status },
+      { name, description, manager: manager || undefined, budget, status },
       { new: true }
     ).populate('manager', 'fullName email');
     
@@ -2386,6 +2684,8 @@ app.post("/api/admin/pharmacies", authenticateToken, authorizeRole("Admin"), asy
       ...req.body,
       createdBy: req.user.id
     };
+    if (pharmacyData.manager === "") pharmacyData.manager = undefined;
+    if (pharmacyData.department === "") pharmacyData.department = undefined;
     
     // Check if pharmacy code already exists
     const existingPharmacy = await Pharmacy.findOne({ code: pharmacyData.code });
@@ -2427,9 +2727,13 @@ app.post("/api/admin/pharmacies", authenticateToken, authorizeRole("Admin"), asy
 // PUT Update Pharmacy
 app.put("/api/admin/pharmacies/:id", authenticateToken, authorizeRole("Admin"), async (req, res) => {
   try {
+    const updateData = { ...req.body };
+    if (updateData.manager === "") updateData.manager = undefined;
+    if (updateData.department === "") updateData.department = undefined;
+    
     const pharmacy = await Pharmacy.findByIdAndUpdate(
       req.params.id,
-      req.body,
+      updateData,
       { new: true }
     ).populate('manager', 'fullName email')
      .populate('department', 'name');

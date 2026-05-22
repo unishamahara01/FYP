@@ -1,9 +1,11 @@
 const Product = require('../models/Product');
+const { getUserFilter } = require('../middleware/auth.middleware');
 
 // Get all products
 exports.getAllProducts = async (req, res) => {
   try {
-    const products = await Product.find()
+    const productFilter = getUserFilter(req, 'createdBy');
+    const products = await Product.find(productFilter)
       .populate('supplier', 'name company')
       .sort({ createdAt: -1 })
       .lean();
@@ -36,7 +38,7 @@ exports.getProductById = async (req, res) => {
 // Create product
 exports.createProduct = async (req, res) => {
   try {
-    const product = new Product(req.body);
+    const product = new Product({ ...req.body, createdBy: req.user.id });
     await product.save();
 
     res.status(201).json({

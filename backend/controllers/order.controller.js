@@ -1,15 +1,19 @@
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const Sale = require('../models/Sale');
+const Customer = require('../models/Customer');
+const User = require('../models/User');
+const { getUserFilter } = require('../middleware/auth.middleware');
 
 // Get all orders
 exports.getAllOrders = async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 100;
+    const orderFilter = getUserFilter(req, 'processedBy');
     
-    const orders = await Order.find()
-      .populate('customer', 'fullName email phone')
-      .populate('processedBy', 'name email')
+    const orders = await Order.find(orderFilter)
+      .populate('customer')
+      .populate('processedBy', 'fullName name email')
       .sort({ createdAt: -1 })
       .limit(limit)
       .lean();
@@ -26,7 +30,7 @@ exports.getOrderById = async (req, res) => {
   try {
     const order = await Order.findById(req.params.id)
       .populate('customer')
-      .populate('processedBy', 'name email')
+      .populate('processedBy', 'fullName name email')
       .lean();
 
     if (!order) {
@@ -40,15 +44,18 @@ exports.getOrderById = async (req, res) => {
   }
 };
 
-// Create order
+// Create order - FULL logic with customer auto-creation, loyalty, and low stock alerts
 exports.createOrder = async (req, res) => {
   try {
-    const { customer, customerName, items, paymentMethod, prescriptionRequired } = req.body;
-
-    // Calculate total
+    console.log("📦 Creating new order...");
+    console.log("Request body:", req.body);
+    
+    const { customerName, customerPhone, customerEmail, customerCity, items, paymentMethod, prescriptionRequired } = req.body;
+    
+    // Calculate order details
     let totalAmount = 0;
     const orderItems = [];
-
+    
     for (const item of items) {
       const product = await Product.findById(item.product);
       
@@ -58,66 +65,167 @@ exports.createOrder = async (req, res) => {
           message: `Product not found: ${item.product}` 
         });
       }
-
+      
       if (product.quantity < item.quantity) {
         return res.status(400).json({ 
           success: false,
           message: `Insufficient stock for ${product.name}. Available: ${product.quantity}` 
         });
       }
+      
+      // Apply discount if product is promoted
+      const priceToUse = product.isPromoted && product.discountPercentage > 0 
+        ? product.price * (1 - product.discountPercentage / 100) 
+        : product.price;
 
-      const subtotal = product.price * item.quantity;
+      const subtotal = priceToUse * item.quantity;
       totalAmount += subtotal;
-
+      
       orderItems.push({
         product: product._id,
         productName: product.name,
         quantity: item.quantity,
         price: product.price,
-        subtotal
+        discountPercentage: product.isPromoted ? product.discountPercentage : 0,
+        appliedPrice: priceToUse,
+        subtotal: subtotal
       });
-
-      // Reduce stock
+      
+      // Update product quantity
       product.quantity -= item.quantity;
+      
+      // AUTOMATED LOW STOCK EMAIL TRIGGER
+      if (product.quantity <= product.reorderLevel && !product.lowStockAlertSent) {
+        console.log(`🚨 Triggering automated low stock email for ${product.name}`);
+        product.lowStockAlertSent = true;
+        
+        // Find Admins/Pharmacists to notify
+        try {
+          const { sendLowStockEmail } = require('../lowStockNotification');
+          const adminUsers = await User.find({ role: { $in: ['Admin', 'Pharmacist'] } });
+          
+          // Fire emails asynchronously without blocking the order process
+          adminUsers.forEach(admin => {
+            if (admin.email) {
+              sendLowStockEmail(admin.email, admin.fullName, [product]).catch(err => {
+                console.error(`Failed to send background email to ${admin.email}:`, err.message);
+              });
+            }
+          });
+        } catch (emailErr) {
+          console.error("Error setting up automated low stock email:", emailErr);
+        }
+      }
+      
       await product.save();
     }
-
+    
     // Generate order number
     const orderCount = await Order.countDocuments();
-    const orderNumber = `ORD-${(orderCount + 1).toString().padStart(6, '0')}`;
-
-    // Create order
-    const order = new Order({
+    const orderNumber = `ORD-${(orderCount + 1001).toString()}`;
+    
+    // ==================== CUSTOMER AUTO-CREATION / UPDATE ====================
+    // Find existing customer by name (case-insensitive)
+    let customer = await Customer.findOne({ 
+      fullName: { $regex: new RegExp(`^${customerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } 
+    });
+    
+    if (customer) {
+      // --- Update existing customer with loyalty points ---
+      const safeTotal = (typeof totalAmount === 'number' && !isNaN(totalAmount)) ? totalAmount : 0;
+      const pointsEarned = Math.floor(safeTotal / 100);
+      customer.loyaltyPoints = ((typeof customer.loyaltyPoints === 'number' && !isNaN(customer.loyaltyPoints)) ? customer.loyaltyPoints : 0) + pointsEarned;
+      
+      // Update tier based on cumulative points
+      if (customer.loyaltyPoints >= 1000) customer.loyaltyTier = 'Platinum';
+      else if (customer.loyaltyPoints >= 500) customer.loyaltyTier = 'Gold';
+      else customer.loyaltyTier = 'Silver';
+      
+      customer.totalPurchases = ((typeof customer.totalPurchases === 'number' && !isNaN(customer.totalPurchases)) ? customer.totalPurchases : 0) + safeTotal;
+      customer.lastVisit = new Date();
+      
+      // Update contact info if provided and currently missing/N/A
+      if (customerPhone && (!customer.phone || customer.phone === 'N/A')) {
+        customer.phone = customerPhone;
+      }
+      if (customerEmail && !customer.email) {
+        customer.email = customerEmail;
+      }
+      if (customerCity && (!customer.address || !customer.address.city)) {
+        customer.address = { ...customer.address, city: customerCity };
+      }
+      
+      await customer.save();
+      console.log(`🪙 Added ${pointsEarned} loyalty points to ${customer.fullName}. Total: ${customer.loyaltyPoints}`);
+    } else {
+      // --- Auto-create new customer ---
+      const safeTotal = (typeof totalAmount === 'number' && !isNaN(totalAmount)) ? totalAmount : 0;
+      const pointsEarned = Math.floor(safeTotal / 100);
+      let loyaltyTier = 'Silver';
+      if (pointsEarned >= 1000) loyaltyTier = 'Platinum';
+      else if (pointsEarned >= 500) loyaltyTier = 'Gold';
+      
+      customer = new Customer({
+        fullName: customerName,
+        phone: customerPhone || 'N/A',
+        email: customerEmail || '',
+        address: { city: customerCity || '' },
+        loyaltyPoints: pointsEarned,
+        loyaltyTier: loyaltyTier,
+        totalPurchases: safeTotal,
+        lastVisit: new Date(),
+        createdAt: new Date(),
+        createdBy: req.user.id
+      });
+      await customer.save();
+      console.log(`✨ Auto-created new customer: ${customerName} with ${pointsEarned} loyalty points`);
+      if (customerPhone) console.log(`   📞 Phone: ${customerPhone}`);
+      if (customerEmail) console.log(`   📧 Email: ${customerEmail}`);
+      if (customerCity) console.log(`   🏙️ City: ${customerCity}`);
+    }
+    
+    // ==================== CREATE ORDER WITH CUSTOMER REFERENCE ====================
+    const newOrder = new Order({
       orderNumber,
-      customer,
+      customer: customer._id, // Link to customer document
       customerName,
       items: orderItems,
       totalAmount,
       paymentMethod,
       prescriptionRequired,
-      processedBy: req.user._id,
-      status: 'Completed'
+      status: 'Completed',
+      processedBy: req.user.id, // JWT encodes 'id', not '_id'
+      createdAt: new Date(),
+      completedAt: new Date()
     });
-
-    await order.save();
-
-    // Create sale record
-    const sale = new Sale({
-      order: order._id,
+    
+    await newOrder.save();
+    
+    // ==================== CREATE SALE RECORD ====================
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
+                        'July', 'August', 'September', 'October', 'November', 'December'];
+    const now = new Date();
+    
+    const newSale = new Sale({
+      order: newOrder._id,
       amount: totalAmount,
-      date: new Date(),
-      month: new Date().toLocaleString('default', { month: 'long' }),
-      year: new Date().getFullYear(),
+      date: now,
+      month: monthNames[now.getMonth()],
+      year: now.getFullYear(),
       paymentMethod,
-      processedBy: req.user._id
+      processedBy: req.user.id
     });
-
-    await sale.save();
-
-    res.status(201).json({
+    
+    await newSale.save();
+    
+    console.log("✅ Order created successfully:", orderNumber);
+    console.log("💰 Sale amount:", totalAmount);
+    
+    res.status(201).json({ 
       success: true,
-      message: 'Order created successfully',
-      order
+      message: 'Order created successfully', 
+      order: newOrder,
+      sale: newSale
     });
   } catch (error) {
     console.error('Error creating order:', error);

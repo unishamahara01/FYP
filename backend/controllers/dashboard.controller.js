@@ -2,6 +2,7 @@ const Product = require('../models/Product');
 const Order = require('../models/Order');
 const Sale = require('../models/Sale');
 const { checkAndSendAlerts } = require('../utils/autoLowStockAlert');
+const { getUserFilter } = require('../middleware/auth.middleware');
 
 // Get dashboard statistics
 exports.getStats = async (req, res) => {
@@ -17,32 +18,53 @@ exports.getStats = async (req, res) => {
         .catch(err => console.error('Error sending automatic alert:', err));
     }
 
-    // Total SKUs (products)
-    const totalSKUs = await Product.countDocuments();
+    const productFilter = getUserFilter(req, 'createdBy');
+    const orderFilter = getUserFilter(req, 'processedBy');
 
-    // Expiring items (within 90 days)
+    // Total SKUs (products) — scoped
+    const totalSKUs = await Product.countDocuments(productFilter);
+
+    // Expiring items (within 90 days) — scoped
     const ninetyDaysFromNow = new Date();
     ninetyDaysFromNow.setDate(ninetyDaysFromNow.getDate() + 90);
     const expiringItems = await Product.countDocuments({
+      ...productFilter,
       expiryDate: { $lte: ninetyDaysFromNow, $gte: new Date() }
     });
 
-    // Low stock items (quantity <= reorder level, including out of stock)
+    // Low stock items (quantity <= reorder level, including out of stock) — scoped
     const lowStockItems = await Product.countDocuments({
+      ...productFilter,
       $expr: { $lte: ['$quantity', '$reorderLevel'] }
     });
 
-    // Today's sales
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    // Today's sales (Nepal Standard Time timezone-aware boundaries)
+    const options = { timeZone: 'Asia/Kathmandu', year: 'numeric', month: 'numeric', day: 'numeric' };
+    const formatter = new Intl.DateTimeFormat('en-US', options);
+    const parts = formatter.formatToParts(new Date());
+    let year, month, day;
+    parts.forEach(p => {
+      if (p.type === 'year') year = parseInt(p.value);
+      if (p.type === 'month') month = parseInt(p.value) - 1;
+      if (p.type === 'day') day = parseInt(p.value);
+    });
+
+    const startOfNepalToday = new Date(Date.UTC(year, month, day, 0, 0, 0, 0));
+    const today = new Date(startOfNepalToday.getTime() - (5 * 60 + 45) * 60 * 1000);
+    const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+
+    // Build scoped match for sales aggregation
+    const saleMatchStage = {
+      date: { $gte: today, $lt: tomorrow }
+    };
+    if (orderFilter.processedBy) {
+      const mongoose = require('mongoose');
+      saleMatchStage.processedBy = new mongoose.Types.ObjectId(orderFilter.processedBy);
+    }
 
     const todaysSales = await Sale.aggregate([
       {
-        $match: {
-          date: { $gte: today, $lt: tomorrow }
-        }
+        $match: saleMatchStage
       },
       {
         $group: {
@@ -70,16 +92,24 @@ exports.getStats = async (req, res) => {
 // Get top products
 exports.getTopProducts = async (req, res) => {
   try {
-    // Get top 5 products by sales in last 30 days
+    const orderFilter = getUserFilter(req, 'processedBy');
+
+    // Get top 5 products by sales in last 30 days — scoped
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
+    const matchStage = {
+      createdAt: { $gte: thirtyDaysAgo },
+      status: 'Completed'
+    };
+    if (orderFilter.processedBy) {
+      const mongoose = require('mongoose');
+      matchStage.processedBy = new mongoose.Types.ObjectId(orderFilter.processedBy);
+    }
+
     const topProducts = await Order.aggregate([
       {
-        $match: {
-          createdAt: { $gte: thirtyDaysAgo },
-          status: 'Completed'
-        }
+        $match: matchStage
       },
       { $unwind: '$items' },
       {
@@ -113,8 +143,10 @@ exports.getTopProducts = async (req, res) => {
 // Get recent activity
 exports.getRecentActivity = async (req, res) => {
   try {
-    // Get last 10 orders
-    const recentOrders = await Order.find()
+    const orderFilter = getUserFilter(req, 'processedBy');
+
+    // Get last 10 orders — scoped
+    const recentOrders = await Order.find(orderFilter)
       .sort({ createdAt: -1 })
       .limit(10)
       .select('orderNumber customerName totalAmount status createdAt')

@@ -72,8 +72,20 @@ const authorizePermission = (...permissions) => {
   };
 };
 
+// Data Isolation Helper
+// Returns a query filter based on the logged-in user's role.
+// Admins see ALL data. Pharmacists only see their own data.
+const getUserFilter = (req, fieldName = 'createdBy') => {
+  if (!req.user) return {};
+  // Admin sees everything
+  if (req.user.role === 'Admin') return {};
+  // Pharmacist sees only their own data
+  return { [fieldName]: req.user.id };
+};
+
 module.exports = {
   authenticateToken,
   authorizeRole,
-  authorizePermission
+  authorizePermission,
+  getUserFilter
 };
