@@ -83,6 +83,18 @@ export default function SignupPage({ onSwitchToLogin, onSignup, onBackToLanding 
       });
       
       console.log('Signup successful:', response);
+      
+      // Store token in localStorage
+      if (response.token) {
+        localStorage.setItem('token', response.token);
+        localStorage.setItem('authToken', response.token); // Backup for compatibility
+      }
+      
+      // Store user info
+      if (response.user) {
+        localStorage.setItem('user', JSON.stringify(response.user));
+      }
+      
       onSignup(); // Navigate to dashboard
       
     } catch (error) {
@@ -97,6 +109,18 @@ export default function SignupPage({ onSwitchToLogin, onSignup, onBackToLanding 
 
   const handleGoogleSuccess = (result) => {
     console.log('Google Sign-In successful:', result);
+    
+    // Store token if provided
+    if (result.token) {
+      localStorage.setItem('token', result.token);
+      localStorage.setItem('authToken', result.token);
+    }
+    
+    // Store user info
+    if (result.user) {
+      localStorage.setItem('user', JSON.stringify(result.user));
+    }
+    
     onSignup(); // Navigate to dashboard
   };
 
@@ -250,7 +274,6 @@ export default function SignupPage({ onSwitchToLogin, onSignup, onBackToLanding 
                 <option value="">Select a role</option>
                 <option value="Pharmacist">Pharmacist</option>
                 <option value="Admin">Admin</option>
-                <option value="Staff">Staff</option>
               </select>
               {errors.role && <span className="error-message">{errors.role}</span>}
             </div>

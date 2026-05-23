@@ -141,7 +141,7 @@ def predict_all():
         ])
         
         print(f"💰 Total value at risk: Rs {total_value_at_risk}")
-        print(f"📤 Returning top {min(20, len(predictions))} predictions")
+        print(f"📤 Returning all {len(predictions)} predictions")
         
         return jsonify({
             'success': True,
@@ -150,7 +150,7 @@ def predict_all():
             'highRisk': high_risk,
             'mediumRisk': medium_risk,
             'totalValueAtRisk': total_value_at_risk,
-            'predictions': predictions[:20],  # Top 20 items
+            'predictions': predictions,  # All products returned for consistency
             'modelType': 'Ridge Regression'
         })
     

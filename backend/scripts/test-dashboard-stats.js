@@ -1,55 +1,53 @@
 const mongoose = require('mongoose');
-const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '../.env') });
-
 const Product = require('../models/Product');
 
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/meditrust')
+mongoose.connect('mongodb://localhost:27017/meditrust')
   .then(async () => {
-    console.log('✓ Connected to MongoDB\n');
-    console.log('═══════════════════════════════════════');
-    console.log('   TESTING DASHBOARD STATS QUERY');
-    console.log('═══════════════════════════════════════\n');
+    console.log('Connected to MongoDB\n');
     
-    // Test the exact query used in dashboard controller
-    const lowStockItems = await Product.countDocuments({
-      $expr: { $lte: ['$quantity', '$reorderLevel'] }
+    console.log('📊 DASHBOARD STATS TEST');
+    console.log('=====================================\n');
+    
+    // 1. Total SKUs
+    const totalSKUs = await Product.countDocuments({});
+    console.log(`1. Total SKUs: ${totalSKUs}`);
+    
+    // 2. Expiring Items (within 90 days)
+    const ninetyDaysFromNow = new Date();
+    ninetyDaysFromNow.setDate(ninetyDaysFromNow.getDate() + 90);
+    const expiringItems = await Product.countDocuments({
+      expiryDate: { $lte: ninetyDaysFromNow, $gte: new Date() }
     });
+    console.log(`2. Expiring Items (90 days): ${expiringItems}`);
     
-    console.log(`📊 Low Stock Count (from query): ${lowStockItems}\n`);
-    
-    // Get all products to verify manually
-    const allProducts = await Product.find().select('name quantity reorderLevel').lean();
-    
-    console.log('📦 All Products:');
-    console.log('─────────────────────────────────────────\n');
-    
-    let manualCount = 0;
-    allProducts.forEach((product, index) => {
-      const isLowStock = product.quantity <= product.reorderLevel;
-      if (isLowStock) manualCount++;
-      
-      console.log(`${index + 1}. ${product.name}`);
-      console.log(`   Quantity: ${product.quantity}`);
-      console.log(`   Reorder Level: ${product.reorderLevel}`);
-      console.log(`   Is Low Stock: ${isLowStock ? 'YES ⚠️' : 'NO ✅'}`);
-      console.log('');
+    // 3. Low Stock Items (quantity <= 50)
+    const LOW_STOCK_THRESHOLD = 50;
+    const lowStock = await Product.countDocuments({
+      quantity: { $lte: LOW_STOCK_THRESHOLD }
     });
+    console.log(`3. Low Stock Items (qty <= 50): ${lowStock}`);
     
-    console.log('═══════════════════════════════════════');
-    console.log(`Query Result: ${lowStockItems}`);
-    console.log(`Manual Count: ${manualCount}`);
-    console.log('═══════════════════════════════════════\n');
+    // Breakdown
+    const outOfStock = await Product.countDocuments({ quantity: 0 });
+    const lowStockOnly = await Product.countDocuments({ 
+      quantity: { $gt: 0, $lte: LOW_STOCK_THRESHOLD }
+    });
+    console.log(`   - Out of Stock (0): ${outOfStock}`);
+    console.log(`   - Low Stock (1-50): ${lowStockOnly}`);
     
-    if (lowStockItems !== manualCount) {
-      console.log('❌ MISMATCH! Query is not working correctly.');
-    } else {
-      console.log('✅ Query is working correctly!');
-    }
+    // List them
+    console.log('\n📦 LOW STOCK PRODUCTS:');
+    const products = await Product.find({
+      quantity: { $lte: LOW_STOCK_THRESHOLD }
+    }).sort({ quantity: 1 });
+    
+    products.forEach(p => {
+      console.log(`   - ${p.name} | Qty: ${p.quantity} | Status: ${p.status}`);
+    });
     
     process.exit(0);
   })
   .catch(err => {
-    console.error('❌ Error:', err.message);
+    console.error('Error:', err);
     process.exit(1);
   });

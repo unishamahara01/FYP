@@ -18,7 +18,7 @@ exports.getStats = async (req, res) => {
         .catch(err => console.error('Error sending automatic alert:', err));
     }
 
-    const productFilter = getUserFilter(req, 'createdBy');
+    const productFilter = {};
     const orderFilter = getUserFilter(req, 'processedBy');
 
     // Total SKUs (products) — scoped
@@ -32,11 +32,9 @@ exports.getStats = async (req, res) => {
       expiryDate: { $lte: ninetyDaysFromNow, $gte: new Date() }
     });
 
-    // Low stock items (quantity <= reorder level, including out of stock) — scoped
-    const lowStockItems = await Product.countDocuments({
-      ...productFilter,
-      $expr: { $lte: ['$quantity', '$reorderLevel'] }
-    });
+    // Low stock items (quantity <= reorder level, aggregated by name)
+    const { getAggregatedLowStockData } = require('../utils/lowStock.util');
+    const { totalCount: lowStockItems } = await getAggregatedLowStockData();
 
     // Today's sales (Nepal Standard Time timezone-aware boundaries)
     const options = { timeZone: 'Asia/Kathmandu', year: 'numeric', month: 'numeric', day: 'numeric' };

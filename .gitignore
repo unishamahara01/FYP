@@ -95,3 +95,27 @@ vite-project/
 test-rbac.html
 image.png
 
+# Exclude helper/summary documents (not part of actual project)
+CRITICAL_EVALUATION_SECTION.md
+MediTrust_BlackBox_Testing.csv
+10_CORE_FEATURES_TESTING_SUMMARY.md
+CUSTOMER_LOYALTY_DEFENSE_ANSWER.md
+DATA_SOURCES_EXPLANATION.md
+LOYALTY_SYSTEM_EXPLANATION.md
+START_ALL.bat
+RESTART_PROJECT.md
+DEPLOYMENT_GUIDE.md
+
+# Exclude AI evaluation results (generated for report only)
+ai/evaluation_results/
+ai/generate_evaluation_metrics.py
+
+# Exclude test scripts (helper scripts, not core functionality)
+backend/scripts/test-order-creation.js
+backend/scripts/calculate-unisha-loyalty.js
+backend/scripts/check-and-update-stock.js
+backend/scripts/create-test-customer-with-loyalty.js
+backend/scripts/add-loyalty-points-to-customers.js
+backend/scripts/migrate-staff-to-pharmacist.js
+backend/scripts/create-test-users.js
+

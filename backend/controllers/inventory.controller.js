@@ -1,24 +1,16 @@
 const Product = require('../models/Product');
 const { sendEmail } = require('../utils/email.util');
+const { getAggregatedLowStockData } = require('../utils/lowStock.util');
 
 // Get low stock items
 exports.getLowStockItems = async (req, res) => {
   try {
-    // Get all products with quantity <= reorder level
-    const lowStockProducts = await Product.find({
-      $expr: { $lte: ['$quantity', '$reorderLevel'] }
-    })
-    .populate('supplier', 'name company email phone')
-    .sort({ quantity: 1 })
-    .lean();
-
-    // Separate into out of stock and low stock
-    const outOfStock = lowStockProducts.filter(p => p.quantity === 0);
-    const lowStock = lowStockProducts.filter(p => p.quantity > 0);
+    const { lowStock, outOfStock, totalCount } = await getAggregatedLowStockData();
+    const lowStockProducts = [...outOfStock, ...lowStock];
 
     res.json({
       success: true,
-      count: lowStockProducts.length,
+      count: totalCount,
       outOfStock: outOfStock,
       lowStock: lowStock,
       products: lowStockProducts // Keep for backward compatibility
@@ -38,12 +30,8 @@ exports.sendLowStockAlert = async (req, res) => {
   try {
     const User = require('../models/User');
     
-    const lowStockProducts = await Product.find({
-      $expr: { $lte: ['$quantity', '$reorderLevel'] }
-    })
-    .populate('supplier', 'name company email')
-    .sort({ quantity: 1 })
-    .lean();
+    const { lowStock, outOfStock, totalCount } = await getAggregatedLowStockData();
+    const lowStockProducts = [...outOfStock, ...lowStock];
 
     if (lowStockProducts.length === 0) {
       return res.json({
@@ -53,10 +41,6 @@ exports.sendLowStockAlert = async (req, res) => {
         totalRecipients: 0
       });
     }
-
-    // Separate out of stock and low stock items
-    const outOfStock = lowStockProducts.filter(p => p.quantity === 0);
-    const lowStock = lowStockProducts.filter(p => p.quantity > 0);
 
     // Send email only to the logged-in user
     const currentUser = req.user; // Get the logged-in user from auth middleware
@@ -97,7 +81,7 @@ exports.sendLowStockAlert = async (req, res) => {
                 <ul style="margin: 10px 0;">
                   ${outOfStock.map(product => `
                     <li style="margin: 5px 0;">
-                      <strong>${product.name}</strong> (Batch: ${product.batchNumber})
+                      <strong>${product.name}</strong> ${product.batchNumber ? `(Batch: ${product.batchNumber})` : ''}
                       <br><small style="color: #666;">Manufacturer: ${product.manufacturer || 'N/A'} | Price: Rs ${product.price}</small>
                     </li>
                   `).join('')}
@@ -112,7 +96,7 @@ exports.sendLowStockAlert = async (req, res) => {
                 <ul style="margin: 10px 0;">
                   ${lowStock.map(product => `
                     <li style="margin: 5px 0;">
-                      <strong>${product.name}</strong> (Batch: ${product.batchNumber}) - <span style="color: #c05621; font-weight: bold;">Qty: ${product.quantity}</span>
+                      <strong>${product.name}</strong> ${product.batchNumber ? `(Batch: ${product.batchNumber})` : ''} - <span style="color: #c05621; font-weight: bold;">Qty: ${product.quantity}</span>
                       <br><small style="color: #666;">Manufacturer: ${product.manufacturer || 'N/A'} | Price: Rs ${product.price}</small>
                     </li>
                   `).join('')}
@@ -184,14 +168,13 @@ exports.sendLowStockAlert = async (req, res) => {
 // Check low stock (automated check)
 exports.checkLowStock = async (req, res) => {
   try {
-    const lowStockProducts = await Product.find({
-      $expr: { $lte: ['$quantity', '$reorderLevel'] }
-    }).lean();
+    const { lowStock, outOfStock, totalCount } = await getAggregatedLowStockData();
+    const lowStockProducts = [...outOfStock, ...lowStock];
 
     res.json({
       success: true,
-      hasLowStock: lowStockProducts.length > 0,
-      count: lowStockProducts.length,
+      hasLowStock: totalCount > 0,
+      count: totalCount,
       products: lowStockProducts
     });
   } catch (error) {

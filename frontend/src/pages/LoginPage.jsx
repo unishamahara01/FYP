@@ -13,6 +13,17 @@ export default function LoginPage({ onSwitchToSignup, onLogin, onBackToLanding, 
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
+  // Capture URL-based login errors (e.g. from Google OAuth redirect)
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const errorParam = params.get('error');
+    if (errorParam) {
+      setErrors({ general: decodeURIComponent(errorParam) });
+      // Clean the query parameter from URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({
@@ -65,6 +76,15 @@ export default function LoginPage({ onSwitchToSignup, onLogin, onBackToLanding, 
       });
       
       console.log('Login successful:', response);
+      
+      // Validate role on frontend
+      if (response.user && response.user.role !== formData.role) {
+        throw new Error(
+          formData.role === 'Admin'
+            ? 'Access Denied: This account does not have Admin privileges.'
+            : 'Access Denied: This account is registered as an Admin. Please select the Admin role to log in.'
+        );
+      }
       
       // Store token in localStorage
       if (response.token) {
@@ -205,7 +225,6 @@ export default function LoginPage({ onSwitchToSignup, onLogin, onBackToLanding, 
               >
                 <option value="Pharmacist">Pharmacist</option>
                 <option value="Admin">Admin</option>
-                <option value="Staff">Staff</option>
               </select>
             </div>
 

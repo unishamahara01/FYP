@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import LandingPage from './pages/LandingPage';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
@@ -6,18 +7,40 @@ import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import Dashboard from './pages/Dashboard';
 import AdminDashboard from './pages/AdminDashboard';
-import StaffDashboard from './pages/StaffDashboard';
 import ReportsPage from './pages/ReportsPage';
 import AccountSettings from './pages/AccountSettings';
 import MedicineDetail from './pages/MedicineDetail';
 import { authAPI } from './services/api';
 
+// A component to protect routes that require authentication
+function ProtectedRoute({ isLoggedIn, isLoading, children }) {
+  if (isLoading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+        <div style={{ fontSize: '18px', fontWeight: '500', color: '#4b5563' }}>Loading...</div>
+      </div>
+    );
+  }
+  return isLoggedIn ? children : <Navigate to="/login" replace />;
+}
+
+// A component to restrict public routes (like login/signup) from already logged-in users
+function PublicRoute({ isLoggedIn, isLoading, children }) {
+  if (isLoading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+        <div style={{ fontSize: '18px', fontWeight: '500', color: '#4b5563' }}>Loading...</div>
+      </div>
+    );
+  }
+  return isLoggedIn ? <Navigate to="/dashboard" replace /> : children;
+}
+
 function App() {
-  const [currentPage, setCurrentPage] = useState('landing');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [userRole, setUserRole] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [previousPage, setPreviousPage] = useState(null);
+  const navigate = useNavigate();
 
   // Check for existing authentication on app load
   useEffect(() => {
@@ -31,8 +54,8 @@ function App() {
           localStorage.clear();
           setIsLoggedIn(false);
           setUserRole(null);
-          setCurrentPage('landing');
           setIsLoading(false);
+          navigate('/');
           return;
         }
         setUserRole(user.role);
@@ -40,63 +63,60 @@ function App() {
         
         // Intercept return redirects from eSewa sandbox to land automatically on the Dashboard
         if (window.location.search.includes('esewa=')) {
-          setCurrentPage('dashboard');
+          navigate(`/dashboard${window.location.search}`, { replace: true });
         }
       }
       setIsLoading(false);
     };
 
     checkAuth();
-  }, []);
+  }, [navigate]);
 
   const switchToSignup = () => {
-    setCurrentPage('signup');
+    navigate('/signup');
   };
 
   const switchToLogin = () => {
-    setCurrentPage('login');
+    navigate('/login');
   };
 
   const switchToLanding = () => {
-    setCurrentPage('landing');
+    navigate('/');
   };
 
   const switchToForgotPassword = () => {
-    setCurrentPage('forgotPassword');
+    navigate('/forgot-password');
   };
 
   const switchToResetPassword = () => {
-    setCurrentPage('resetPassword');
+    navigate('/reset-password');
   };
 
   const handleLogin = () => {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
     setUserRole(user.role);
     setIsLoggedIn(true);
-    // After login, go to dashboard
-    setCurrentPage('dashboard');
+    navigate('/dashboard');
   };
 
   const handleSignup = () => {
     const user = JSON.parse(localStorage.getItem('user') || '{}');
     setUserRole(user.role);
     setIsLoggedIn(true);
-    // After signup, go to dashboard
-    setCurrentPage('dashboard');
+    navigate('/dashboard');
   };
 
   const handleResetSuccess = () => {
     alert('Password reset successful! Please login with your new password.');
-    setCurrentPage('login');
+    navigate('/login');
   };
 
   const handleAccountSettings = () => {
-    setPreviousPage(currentPage);
-    setCurrentPage('accountSettings');
+    navigate('/settings');
   };
 
   const handleBackFromSettings = () => {
-    setCurrentPage(previousPage || 'dashboard');
+    navigate(-1);
   };
 
   const handleLogout = async () => {
@@ -109,78 +129,119 @@ function App() {
     localStorage.clear();
     setIsLoggedIn(false);
     setUserRole(null);
-    setCurrentPage('landing');
+    navigate('/');
   };
 
   // Show loading spinner while checking authentication
   if (isLoading) {
     return (
       <div className="App" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
-        <div>Loading...</div>
+        <div style={{ fontSize: '18px', fontWeight: '500', color: '#4b5563' }}>Loading...</div>
       </div>
     );
   }
 
-  if (isLoggedIn) {
-    const user = JSON.parse(localStorage.getItem('user') || '{}');
-    
-    // If user is logged in but on landing page, show landing page with dashboard option
-    if (currentPage === 'landing') {
-      return (
-        <div className="App">
-          <LandingPage 
-            onSwitchToLogin={switchToLogin} 
-            onSwitchToSignup={switchToSignup}
-            isLoggedIn={true}
-            user={user}
-            onGoToDashboard={() => setCurrentPage('dashboard')}
-            onLogout={handleLogout}
-          />
-        </div>
-      );
-    }
-    
-    if (currentPage === 'accountSettings') {
-      return (
-        <div className="App">
-          <AccountSettings onBack={handleBackFromSettings} onLogout={handleLogout} />
-        </div>
-      );
-    }
-    
-    return (
-      <div className="App">
-        {user.role === 'Staff' ? (
-          <StaffDashboard onLogout={handleLogout} onAccountSettings={handleAccountSettings} />
-        ) : user.role === 'Admin' ? (
-          <AdminDashboard onLogout={handleLogout} onAccountSettings={handleAccountSettings} />
-        ) : (
-          <Dashboard onLogout={handleLogout} onAccountSettings={handleAccountSettings} userRole={user.role} />
-        )}
-      </div>
-    );
-  }
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
 
   return (
     <div className="App">
-      {currentPage === 'landing' ? (
-        <LandingPage onSwitchToLogin={switchToLogin} onSwitchToSignup={switchToSignup} />
-      ) : currentPage === 'login' ? (
-        <LoginPage 
-          onSwitchToSignup={switchToSignup} 
-          onLogin={handleLogin} 
-          onBackToLanding={switchToLanding}
-          onSwitchToForgotPassword={switchToForgotPassword}
+      <Routes>
+        {/* Public Landing Page */}
+        <Route 
+          path="/" 
+          element={
+            <LandingPage 
+              onSwitchToLogin={switchToLogin} 
+              onSwitchToSignup={switchToSignup}
+              isLoggedIn={isLoggedIn}
+              user={user}
+              onGoToDashboard={() => navigate('/dashboard')}
+              onLogout={handleLogout}
+            />
+          } 
         />
-      ) : currentPage === 'signup' ? (
-        <SignupPage onSwitchToLogin={switchToLogin} onSignup={handleSignup} onBackToLanding={switchToLanding} />
-      ) : currentPage === 'forgotPassword' ? (
-        <ForgotPasswordPage onBackToLogin={switchToLogin} onSwitchToReset={switchToResetPassword} />
-      ) : currentPage === 'resetPassword' ? (
-        <ResetPasswordPage onBackToLogin={switchToLogin} onResetSuccess={handleResetSuccess} />
-      ) : null}
+
+        {/* Public Only Auth Routes */}
+        <Route 
+          path="/login" 
+          element={
+            <PublicRoute isLoggedIn={isLoggedIn} isLoading={isLoading}>
+              <LoginPage 
+                onSwitchToSignup={switchToSignup} 
+                onLogin={handleLogin} 
+                onBackToLanding={switchToLanding}
+                onSwitchToForgotPassword={switchToForgotPassword}
+              />
+            </PublicRoute>
+          } 
+        />
+
+        <Route 
+          path="/signup" 
+          element={
+            <PublicRoute isLoggedIn={isLoggedIn} isLoading={isLoading}>
+              <SignupPage 
+                onSwitchToLogin={switchToLogin} 
+                onSignup={handleSignup} 
+                onBackToLanding={switchToLanding} 
+              />
+            </PublicRoute>
+          } 
+        />
+
+        <Route 
+          path="/forgot-password" 
+          element={
+            <PublicRoute isLoggedIn={isLoggedIn} isLoading={isLoading}>
+              <ForgotPasswordPage 
+                onBackToLogin={switchToLogin} 
+                onSwitchToReset={switchToResetPassword} 
+              />
+            </PublicRoute>
+          } 
+        />
+
+        <Route 
+          path="/reset-password" 
+          element={
+            <PublicRoute isLoggedIn={isLoggedIn} isLoading={isLoading}>
+              <ResetPasswordPage 
+                onBackToLogin={switchToLogin} 
+                onResetSuccess={handleResetSuccess} 
+              />
+            </PublicRoute>
+          } 
+        />
+
+        {/* Protected Dashboard Route */}
+        <Route 
+          path="/dashboard" 
+          element={
+            <ProtectedRoute isLoggedIn={isLoggedIn} isLoading={isLoading}>
+              {user.role === 'Admin' ? (
+                <AdminDashboard onLogout={handleLogout} onAccountSettings={handleAccountSettings} />
+              ) : (
+                <Dashboard onLogout={handleLogout} onAccountSettings={handleAccountSettings} userRole={user.role} />
+              )}
+            </ProtectedRoute>
+          } 
+        />
+
+        {/* Protected Settings Route */}
+        <Route 
+          path="/settings" 
+          element={
+            <ProtectedRoute isLoggedIn={isLoggedIn} isLoading={isLoading}>
+              <AccountSettings onBack={handleBackFromSettings} onLogout={handleLogout} />
+            </ProtectedRoute>
+          } 
+        />
+
+        {/* Fallback Catch-All Route */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </div>
   );
 }
 
-export default App;
+export default App;

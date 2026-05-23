@@ -16,10 +16,21 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
   const [error, setError] = React.useState('');
   const [searchQuery, setSearchQuery] = React.useState('');
   
-  // AI Analytics state
+  // Stats for dashboard cards
+  const [stats, setStats] = React.useState({
+    totalUsers: 0,
+    totalDepartments: 0,
+    totalPharmacies: 0,
+    totalSuppliers: 0,
+    totalCustomers: 0,
+    totalProducts: 0
+  });
+  
+  // AI Analytics state (kept for compatibility, hidden from admin UI)
   const [aiPredictions, setAiPredictions] = React.useState(null);
   const [demandPredictions, setDemandPredictions] = React.useState([]);
   const [aiActiveTab, setAiActiveTab] = React.useState('expiry');
+  const [purchaseOrders, setPurchaseOrders] = React.useState([]);
   
   // Modal states
   const [showAddModal, setShowAddModal] = React.useState(false);
@@ -33,10 +44,51 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
   // Get current user info
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
 
-  // Fetch AI predictions when AI Analytics tab is active
+  // Fetch stats on mount
   React.useEffect(() => {
-    if (activeTab === 'ai-analytics') {
-      fetchAIPredictions();
+    fetchAllStats();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fetchAllStats = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      // Fetch all counts
+      const [usersRes, deptsRes, pharmsRes, suppliersRes, customersRes, productsRes] = await Promise.all([
+        fetch('http://localhost:3001/api/admin/users', { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch('http://localhost:3001/api/admin/departments', { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch('http://localhost:3001/api/admin/pharmacies', { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch('http://localhost:3001/api/suppliers', { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch('http://localhost:3001/api/customers', { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch('http://localhost:3001/api/products', { headers: { 'Authorization': `Bearer ${token}` } })
+      ]);
+
+      const usersData = await usersRes.json();
+      const deptsData = await deptsRes.json();
+      const pharmsData = await pharmsRes.json();
+      const suppliersData = await suppliersRes.json();
+      const customersData = await customersRes.json();
+      const productsData = await productsRes.json();
+
+      setStats({
+        totalUsers: Array.isArray(usersData.users) ? usersData.users.length : (Array.isArray(usersData) ? usersData.length : 0),
+        totalDepartments: Array.isArray(deptsData.departments) ? deptsData.departments.length : (Array.isArray(deptsData) ? deptsData.length : 0),
+        totalPharmacies: Array.isArray(pharmsData.pharmacies) ? pharmsData.pharmacies.length : (Array.isArray(pharmsData) ? pharmsData.length : 0),
+        totalSuppliers: Array.isArray(suppliersData) ? suppliersData.length : 0,
+        totalCustomers: Array.isArray(customersData) ? customersData.length : 0,
+        totalProducts: Array.isArray(productsData) ? productsData.length : 0
+      });
+    } catch (error) {
+      console.error('Error fetching stats:', error);
+    }
+  };
+
+  // Fetch overview stats when overview tab is active
+  React.useEffect(() => {
+    if (activeTab === 'overview') {
+      fetchOverviewStats();
+      fetchAIPredictions(); // Fetch AI predictions when Overview tab loads
     }
   }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -277,8 +329,114 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
     }
   };
 
+  const fetchPurchaseOrders = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('http://localhost:3001/api/purchase-orders', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPurchaseOrders(Array.isArray(data) ? data : []);
+      }
+    } catch (error) {
+      console.error('Error fetching purchase orders:', error);
+    }
+  };
+
+  const createPurchaseRequest = async (suggestion) => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('http://localhost:3001/api/purchase-orders', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          productId: suggestion.productId,
+          productName: suggestion.productName,
+          suggestedOrderQty: suggestion.suggestedOrderQty,
+          estimatedCost: suggestion.estimatedCost
+        })
+      });
+      
+      if (!res.ok) throw new Error("Failed to create purchase request");
+      
+      const data = await res.json();
+      
+      // Check if purchase order already existed
+      if (data.alreadyExists) {
+        alert(`ℹ️ A purchase order for ${suggestion.productName} already exists in Pending Deliveries!`);
+        // Still refresh to update the UI
+        fetchAIPredictions();
+        fetchPurchaseOrders();
+        return;
+      }
+      
+      // Add new PO to the list
+      setPurchaseOrders([data.po, ...purchaseOrders]);
+      
+      // Refresh AI predictions to update the UI
+      fetchAIPredictions();
+      
+      alert(`✅ Purchase request created for ${suggestion.productName}! Check 'Pending Deliveries' below.`);
+    } catch (error) {
+      console.error("PO Creation error:", error);
+      alert(`❌ Error creating request: ${error.message}`);
+    }
+  };
+
+  const fulfillOrder = async (poId) => {
+    const token = localStorage.getItem('token');
+    
+    try {
+      console.log(`🔄 Attempting to fulfill PO: ${poId}`);
+      
+      const res = await fetch(`http://localhost:3001/api/purchase-orders/${poId}/fulfill`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        }
+      });
+
+      console.log(`📡 Response status: ${res.status}`);
+      
+      if (!res.ok) {
+        const errorData = await res.json();
+        console.error("❌ Fulfillment failed:", errorData);
+        alert(`❌ Error restocking: ${errorData.message || 'Unknown error'}`);
+        return;
+      }
+
+      const data = await res.json();
+      console.log("✅ Fulfillment successful:", data);
+      
+      // Update local state
+      setPurchaseOrders(purchaseOrders.map(po => po._id === poId ? data.po : po));
+      
+      // Refresh AI predictions to update suggestions
+      fetchAIPredictions();
+      
+      // Show success message
+      alert(`🎉 Successfully restocked ${data.po.productName}! Stock has been updated to ${data.product.quantity} units.`);
+      
+    } catch (error) {
+      console.error("❌ Network error:", error);
+      alert(`❌ Network Error: ${error.message}`);
+    }
+  };
+
+  // Fetch purchase orders when AI Analytics tab is active
+  React.useEffect(() => {
+    if (activeTab === 'overview') {
+      fetchPurchaseOrders();
+    }
+  }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const fetchData = async () => {
-    if (activeTab === 'reports' || activeTab === 'suppliers' || activeTab === 'customers' || activeTab === 'ai-analytics') return; // These pages handle their own data fetching
+    if (activeTab === 'reports' || activeTab === 'suppliers' || activeTab === 'customers' || activeTab === 'overview') return; // These pages handle their own data fetching
     
     setLoading(true);
     setError('');
@@ -339,6 +497,18 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
       console.error(`❌ Error fetching ${activeTab}:`, err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchOverviewStats = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      // Overview stats removed - Admin focuses on management
+      // Removed to fix compilation errors
+    } catch (error) {
+      console.error('Error fetching overview stats:', error);
     }
   };
 
@@ -497,7 +667,6 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
               <option value="">Select Role</option>
               <option value="Admin">Admin</option>
               <option value="Pharmacist">Pharmacist</option>
-              <option value="Staff">Staff</option>
             </select>
           </div>
         </>
@@ -531,7 +700,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
               <option value="">No Manager Assigned (Optional)</option>
               {Array.isArray(users) && users.map(user => (
                 <option key={user._id} value={user._id}>
-                  {user.fullName} ({user.role || 'Staff'})
+                  {user.fullName} ({user.role || 'Pharmacist'})
                 </option>
               ))}
             </select>
@@ -954,6 +1123,26 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
   const renderAIAnalytics = () => {
     return (
       <div className="section-content">
+        {/* Admin View-Only Notice */}
+        <div style={{
+          background: '#eff6ff',
+          border: '1px solid #bfdbfe',
+          borderRadius: '8px',
+          padding: '12px 16px',
+          marginBottom: '20px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px'
+        }}>
+          <span style={{fontSize: '20px'}}>👁️</span>
+          <div>
+            <strong style={{color: '#1e40af'}}>Admin View Mode</strong>
+            <p style={{margin: '4px 0 0 0', color: '#3b82f6', fontSize: '14px'}}>
+              You can view AI predictions and analytics. Reorder actions are handled by Pharmacists.
+            </p>
+          </div>
+        </div>
+
         <div className="ai-analytics-header">
           <div className="ai-analytics-title">
             <div className="ai-icon-large">🤖</div>
@@ -986,7 +1175,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
             className={`ai-tab ${aiActiveTab === 'demand' ? 'active' : ''}`}
             onClick={() => setAiActiveTab('demand')}
           >
-            📊 Demand Forecast
+            📊 Demand Forecast & Reorder
           </button>
         </div>
 
@@ -1073,47 +1262,48 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
                             </td>
                             <td>
                               {pred.daysUntilExpiry < 0 ? (
-                                <button 
-                                  className="promo-btn dispose"
-                                  onClick={() => handleDisposeProduct(pred.productId, pred.productName)}
-                                >
-                                  🗑️ Dispose
-                                </button>
+                                // Admin View-Only: Show expired status but cannot dispose
+                                <span style={{
+                                  padding: '8px 16px',
+                                  background: '#fee2e2',
+                                  color: '#991b1b',
+                                  borderRadius: '6px',
+                                  fontWeight: 600,
+                                  fontSize: '13px',
+                                  display: 'inline-block'
+                                }}>
+                                  😊 EXPIRED - Remove immediately
+                                </span>
                               ) : pred.currentStock === 0 ? (
                                 <span className="promo-status" style={{color: '#64748b'}}>
                                   📦 Out of Stock
                                 </span>
                               ) : pred.isPromoted ? (
-                                <span className="promo-status active">
+                                // Admin View-Only: Show active promotion but cannot remove
+                                <span style={{
+                                  padding: '8px 16px',
+                                  background: '#dcfce7',
+                                  color: '#166534',
+                                  borderRadius: '6px',
+                                  fontWeight: 600,
+                                  fontSize: '14px',
+                                  display: 'inline-block'
+                                }}>
                                   🟢 {pred.discountPercentage}% Active
-                                  <button 
-                                    className="promo-remove"
-                                    onClick={() => handleRemovePromotion(pred.productId)}
-                                  >
-                                    Remove Promo
-                                  </button>
                                 </span>
                               ) : pred.riskLevel === 'Critical' || pred.riskLevel === 'High' ? (
+                                // Admin View-Only: Show suggested discount but no Apply button
                                 <div className="promo-input-group">
-                                  <input 
-                                    type="number" 
-                                    className="promo-input" 
-                                    id={`discount-${pred.productId}`}
-                                    defaultValue={Math.round((pred.riskScore / 100) * 30)} 
-                                    min="0" 
-                                    max="100" 
-                                  />
-                                  <span className="promo-percent">%</span>
-                                  <button 
-                                    className="promo-btn apply"
-                                    onClick={() => {
-                                      const discountInput = document.getElementById(`discount-${pred.productId}`);
-                                      const discount = discountInput ? discountInput.value : 20;
-                                      handleApplyPromotion(pred.productId, discount);
-                                    }}
-                                  >
-                                    Apply
-                                  </button>
+                                  <span style={{
+                                    padding: '8px 16px',
+                                    background: '#eff6ff',
+                                    color: '#1e40af',
+                                    borderRadius: '6px',
+                                    fontWeight: 600,
+                                    fontSize: '14px'
+                                  }}>
+                                    👁️ Suggested: {Math.round((pred.riskScore / 100) * 30)}% discount
+                                  </span>
                                 </div>
                               ) : (
                                 <span className="promo-status">No promotion</span>
@@ -1151,130 +1341,316 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
           </>
         )}
 
-        {/* Demand Forecast Tab */}
+        {/* Demand Forecast & Reorder Tab - MERGED */}
         {aiActiveTab === 'demand' && (
           <>
             {/* Summary Cards */}
             <div className="ai-summary-cards">
               <div className="ai-summary-card high">
-                <div className="ai-summary-number">{demandPredictions.length > 0 ? demandPredictions.length : 0}</div>
+                <div className="ai-summary-number">{demandPredictions.length}</div>
                 <div className="ai-summary-label">PRODUCTS ANALYZED</div>
               </div>
               <div className="ai-summary-card critical">
-                <div className="ai-summary-number">{demandPredictions.filter(p => (p.predicted30DayDemand || 0) > 0).length}</div>
-                <div className="ai-summary-label">TRENDING PRODUCTS IDENTIFIED</div>
+                <div className="ai-summary-number">{demandPredictions.filter(p => p.stockoutRisk === 'High').length}</div>
+                <div className="ai-summary-label">HIGH PRIORITY</div>
               </div>
               <div className="ai-summary-card value">
                 <div className="ai-summary-number">
-                  {demandPredictions.length > 0 
-                    ? `${Math.round(demandPredictions.reduce((sum, p) => sum + (p.predicted30DayDemand || 0), 0) / demandPredictions.length)} units/mo`
-                    : '0 units/mo'
-                  }
+                  {demandPredictions.filter(p => p.stockoutRisk === 'High' || p.stockoutRisk === 'Medium').length}
                 </div>
-                <div className="ai-summary-label">AVG MONTHLY DEMAND</div>
+                <div className="ai-summary-label">REORDER NEEDED</div>
               </div>
             </div>
 
-            {/* Demand Forecast Table */}
+            {/* Unified Table */}
             <div className="dashboard-card" style={{marginTop: '24px'}}>
               <div className="card-header">
-                <h3>Top Forecasted Demand</h3>
+                <h3>📊 Demand Forecast & Intelligent Reorder Suggestions</h3>
+                <p style={{fontSize: '14px', color: '#64748b', marginTop: '4px'}}>
+                  Products sorted by priority - High-risk items with reorder suggestions shown first
+                </p>
               </div>
               {demandPredictions.length > 0 ? (
                 <div className="table-container">
                   <table className="expiry-risk-table">
                     <thead>
                       <tr>
-                        <th>PRODUCT (CATEGORY)</th>
+                        <th>PRIORITY</th>
+                        <th>PRODUCT</th>
                         <th>CURRENT STOCK</th>
-                        <th>PREDICTED 30 DAY DEMAND</th>
-                        <th>MARKET TREND</th>
+                        <th>30-DAY DEMAND</th>
                         <th>STOCKOUT RISK</th>
+                        <th>REORDER SUGGESTION</th>
+                        <th>ACTION</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {demandPredictions.slice(0, 10).map((prediction, index) => {
-                        const currentStock = prediction.currentStock || 0;
-                        const predictedDemand = prediction.predicted30DayDemand || 0;
-                        const stockoutRisk = prediction.stockoutRisk || 'Low';
-                        const daysUntilStockout = Math.floor(prediction.daysUntilStockout || 999);
-                        const avgDailySales = predictedDemand > 0 ? (predictedDemand / 30).toFixed(1) : 0;
-                        
-                        return (
-                          <tr key={index}>
-                            <td>
-                              <div className="product-cell">
-                                <div className="product-name-expiry">{prediction.productName}</div>
-                                <div className="product-batch">General</div>
-                              </div>
-                            </td>
-                            <td>
-                              <div className="stock-cell">
-                                <div className="stock-units">{currentStock} units</div>
-                                <div className="stock-value-text">Avg Sales: {avgDailySales} units/day</div>
-                              </div>
-                            </td>
-                            <td>
-                              <div className="stock-cell">
-                                <div className="stock-units" style={{color: '#2563eb', fontWeight: 700}}>{predictedDemand} units/mo</div>
-                                <div className="stock-value-text">Revenue: Rs {(predictedDemand * 50).toLocaleString()}</div>
-                              </div>
-                            </td>
-                            <td>
-                              <span className="days-badge" style={{
-                                background: stockoutRisk === 'High' ? '#fee2e2' : stockoutRisk === 'Medium' ? '#fef3c7' : '#dcfce7',
-                                color: stockoutRisk === 'High' ? '#dc2626' : stockoutRisk === 'Medium' ? '#d97706' : '#16a34a'
-                              }}>
-                                {stockoutRisk === 'High' ? 'Increasing' : stockoutRisk === 'Medium' ? 'Moderate' : 'Stable'}
-                              </span>
-                            </td>
-                            <td>
-                              <div className="recommendation-cell">
-                                {stockoutRisk === 'High' ? (
-                                  <>
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" style={{flexShrink: 0}}>
-                                      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-                                      <line x1="12" y1="9" x2="12" y2="13"/>
-                                      <line x1="12" y1="17" x2="12.01" y2="17"/>
-                                    </svg>
-                                    <span style={{color: '#ef4444', fontWeight: 600}}>Out in {daysUntilStockout} days</span>
-                                  </>
-                                ) : stockoutRisk === 'Medium' ? (
-                                  <>
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" style={{flexShrink: 0}}>
-                                      <circle cx="12" cy="12" r="10"/>
-                                      <line x1="12" y1="8" x2="12" y2="12"/>
-                                      <line x1="12" y1="16" x2="12.01" y2="16"/>
-                                    </svg>
-                                    <span style={{color: '#f59e0b', fontWeight: 600}}>Out in {daysUntilStockout} days</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2" style={{flexShrink: 0}}>
-                                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-                                      <polyline points="22 4 12 14.01 9 11.01"/>
-                                    </svg>
-                                    <span style={{color: '#10b981', fontWeight: 600}}>Stock sufficient</span>
-                                  </>
+                      {demandPredictions
+                        .map(demand => {
+                          // Try to find matching reorder suggestion
+                          const reorder = aiPredictions?.reorder_suggestions?.find(
+                            r => r.productId === demand.productId || r.productName === demand.productName
+                          );
+                          
+                          // Check if this product already has a pending purchase order
+                          const hasPendingPO = purchaseOrders.some(
+                            po => po.status === 'Pending' && 
+                                  (po.product === demand.productId || po.productName === demand.productName)
+                          );
+                          
+                          // If no explicit reorder suggestion but product is high/medium risk, create one
+                          let finalReorder = reorder;
+                          if (!reorder && (demand.stockoutRisk === 'High' || demand.stockoutRisk === 'Medium')) {
+                            // Calculate suggested order quantity: enough to cover 30 days + safety stock
+                            const suggestedQty = Math.max(
+                              Math.ceil(demand.predicted30DayDemand - demand.currentStock + (demand.predicted30DayDemand * 0.2)),
+                              50 // Minimum order quantity
+                            );
+                            
+                            finalReorder = {
+                              productId: demand.productId,
+                              productName: demand.productName,
+                              suggestedOrderQty: suggestedQty,
+                              estimatedCost: suggestedQty * (demand.price || 30) // Use product price or default
+                            };
+                          }
+                          
+                          return {
+                            ...demand,
+                            reorder: finalReorder,
+                            hasPendingPO: hasPendingPO,
+                            priority: demand.stockoutRisk === 'High' ? 1 : demand.stockoutRisk === 'Medium' ? 2 : 3
+                          };
+                        })
+                        .sort((a, b) => a.priority - b.priority)
+                        .map((item, index) => {
+                          const daysOut = Math.floor(item.daysUntilStockout || 999);
+                          return (
+                            <tr key={index} style={{
+                              backgroundColor: 'white'
+                            }}>
+                              <td>
+                                {item.priority === 1 && (
+                                  <span style={{background: '#fee2e2', color: '#991b1b', padding: '4px 12px', borderRadius: '12px', fontSize: '12px', fontWeight: 700}}>
+                                    ⚠️ HIGH
+                                  </span>
                                 )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
+                                {item.priority === 2 && (
+                                  <span style={{background: '#fef3c7', color: '#92400e', padding: '4px 12px', borderRadius: '12px', fontSize: '12px', fontWeight: 700}}>
+                                    ⚡ MEDIUM
+                                  </span>
+                                )}
+                                {item.priority === 3 && (
+                                  <span style={{background: '#d1fae5', color: '#065f46', padding: '4px 12px', borderRadius: '12px', fontSize: '12px', fontWeight: 700}}>
+                                    ✅ LOW
+                                  </span>
+                                )}
+                              </td>
+                              <td>
+                                <div className="product-name-expiry">{item.productName}</div>
+                              </td>
+                              <td>{item.currentStock} units</td>
+                              <td style={{color: '#2563eb', fontWeight: 700}}>{item.predicted30DayDemand} units</td>
+                              <td>
+                                {item.stockoutRisk === 'High' ? (
+                                  <span style={{color: '#ef4444', fontWeight: 600}}>⚠️ Out in {daysOut} days</span>
+                                ) : item.stockoutRisk === 'Medium' ? (
+                                  <span style={{color: '#f59e0b', fontWeight: 600}}>⚡ Out in {daysOut} days</span>
+                                ) : (
+                                  <span style={{color: '#10b981', fontWeight: 600}}>✅ Sufficient</span>
+                                )}
+                              </td>
+                              <td>
+                                {item.hasPendingPO ? (
+                                  <div style={{background: '#e0f2fe', padding: '8px', borderRadius: '8px', border: '1px solid #7dd3fc'}}>
+                                    <div style={{fontSize: '14px', fontWeight: 600, color: '#0369a1'}}>
+                                      ✅ Order Placed
+                                    </div>
+                                    <div style={{fontSize: '12px', color: '#64748b'}}>
+                                      Check Pending Deliveries
+                                    </div>
+                                  </div>
+                                ) : item.reorder ? (
+                                  <div style={{background: '#eff6ff', padding: '8px', borderRadius: '8px', border: '1px solid #bfdbfe'}}>
+                                    <div style={{fontSize: '14px', fontWeight: 600, color: '#1e40af'}}>
+                                      Order: {item.reorder.suggestedOrderQty} units
+                                    </div>
+                                    <div style={{fontSize: '12px', color: '#64748b'}}>
+                                      Cost: Rs {item.reorder.estimatedCost?.toLocaleString()}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span style={{color: '#94a3b8'}}>No reorder needed</span>
+                                )}
+                              </td>
+                              <td>
+                                {item.hasPendingPO ? (
+                                  <span style={{color: '#0369a1', fontWeight: 600, fontSize: '14px'}}>
+                                    ✅ Order Placed
+                                  </span>
+                                ) : item.reorder ? (
+                                  // Admin can only VIEW, not create reorder requests
+                                  <span style={{
+                                    color: '#6366f1', 
+                                    fontWeight: 600, 
+                                    fontSize: '14px',
+                                    padding: '6px 12px',
+                                    background: '#eef2ff',
+                                    borderRadius: '6px',
+                                    display: 'inline-block'
+                                  }}>
+                                    👁️ Reorder Needed
+                                  </span>
+                                ) : (
+                                  <span style={{color: '#94a3b8'}}>-</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
                     </tbody>
                   </table>
                 </div>
               ) : (
                 <div style={{padding: '40px', textAlign: 'center', color: '#64748b'}}>
-                  <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="1.5" style={{margin: '0 auto 16px'}}>
-                    <path d="M3 3v18h18"/>
-                    <path d="M18 17V9"/>
-                    <path d="M13 17V5"/>
-                    <path d="M8 17v-3"/>
-                  </svg>
-                  <p style={{fontSize: '16px', marginBottom: '8px'}}>No AI Demand Predictions Available</p>
-                  <p style={{fontSize: '14px', color: '#94a3b8'}}>Click "Retrain & Refresh" to generate demand forecasts</p>
+                  <p>No predictions available - Click "Retrain & Refresh"</p>
+                </div>
+              )}
+            </div>
+
+            {/* Pending Deliveries Section */}
+            {purchaseOrders && purchaseOrders.filter(po => po.status === 'Pending').length > 0 && (
+              <div className="dashboard-card" style={{marginTop: '24px', background: '#eff6ff', border: '2px solid #bfdbfe'}}>
+                <div className="card-header" style={{background: '#dbeafe'}}>
+                  <h3>🚚 Pending Deliveries ({purchaseOrders.filter(po => po.status === 'Pending').length})</h3>
+                  <p style={{fontSize: '14px', color: '#1e40af', marginTop: '4px'}}>
+                    Track your purchase orders and confirm receipt when stock arrives
+                  </p>
+                </div>
+                <div className="table-container">
+                  <table className="expiry-risk-table">
+                    <thead>
+                      <tr>
+                        <th>PO NUMBER</th>
+                        <th>PRODUCT</th>
+                        <th>QUANTITY</th>
+                        <th>ESTIMATED COST</th>
+                        <th>ORDERED DATE</th>
+                        <th>ACTION</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {purchaseOrders
+                        .filter(po => po.status === 'Pending')
+                        .map((po) => (
+                          <tr key={po._id} style={{background: 'white'}}>
+                            <td>
+                              <span style={{fontWeight: 700, color: '#2563eb'}}>
+                                {po.poNumber || `PO-${po._id.slice(-6).toUpperCase()}`}
+                              </span>
+                            </td>
+                            <td>
+                              <div className="product-name-expiry">{po.productName}</div>
+                            </td>
+                            <td>
+                              <span style={{color: '#059669', fontWeight: 700}}>
+                                +{po.suggestedOrderQty} units
+                              </span>
+                            </td>
+                            <td>Rs {(po.estimatedCost || 0).toLocaleString()}</td>
+                            <td>{new Date(po.createdAt || po.orderDate).toLocaleDateString()}</td>
+                            <td>
+                              {/* Admin View-Only: Cannot confirm receipt */}
+                              <span style={{
+                                padding: '8px 16px',
+                                background: '#fef3c7',
+                                color: '#92400e',
+                                borderRadius: '6px',
+                                fontWeight: 600,
+                                fontSize: '13px'
+                              }}>
+                                ⏳ Awaiting Receipt
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Completed Deliveries Section - Always show */}
+            <div className="dashboard-card" style={{marginTop: '24px'}}>
+              <div className="card-header">
+                <h3>📜 Restock History (Last 10)</h3>
+                <p style={{fontSize: '14px', color: '#64748b', marginTop: '4px'}}>
+                  Recently completed purchase orders
+                </p>
+              </div>
+              {purchaseOrders && purchaseOrders.filter(po => po.status === 'Received').length > 0 ? (
+                <div className="table-container">
+                  <table className="expiry-risk-table" style={{opacity: 0.85}}>
+                    <thead>
+                      <tr>
+                        <th>PO NUMBER</th>
+                        <th>PRODUCT</th>
+                        <th>QUANTITY</th>
+                        <th>COST</th>
+                        <th>RECEIVED DATE</th>
+                        <th>STATUS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {purchaseOrders
+                        .filter(po => po.status === 'Received')
+                        .slice(0, 10)
+                        .map((po) => (
+                          <tr key={po._id}>
+                            <td>
+                              <span style={{fontWeight: 600, color: '#64748b'}}>
+                                {po.poNumber || `PO-${po._id.slice(-6).toUpperCase()}`}
+                              </span>
+                            </td>
+                            <td>{po.productName}</td>
+                            <td>
+                              <span style={{color: '#059669', fontWeight: 600}}>
+                                +{po.suggestedOrderQty} units
+                              </span>
+                            </td>
+                            <td>Rs {(po.estimatedCost || 0).toLocaleString()}</td>
+                            <td>{new Date(po.receivedAt || po.updatedAt).toLocaleDateString()}</td>
+                            <td>
+                              <span style={{
+                                background: '#dcfce7',
+                                color: '#166534',
+                                padding: '4px 12px',
+                                borderRadius: '12px',
+                                fontSize: '12px',
+                                fontWeight: 600
+                              }}>
+                                ✅ Completed
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div style={{
+                  padding: '40px',
+                  textAlign: 'center',
+                  color: '#9ca3af',
+                  background: '#f9fafb',
+                  borderRadius: '8px',
+                  margin: '16px'
+                }}>
+                  <div style={{fontSize: '48px', marginBottom: '16px'}}>📦</div>
+                  <div style={{fontSize: '16px', fontWeight: 500, marginBottom: '8px', color: '#6b7280'}}>No Completed Orders Yet</div>
+                  <div style={{fontSize: '14px'}}>
+                    Completed purchase orders will appear here once they are received
+                  </div>
                 </div>
               )}
             </div>
@@ -1367,14 +1743,16 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
             <span className="nav-text">Reports</span>
           </div>
 
+          {/* AI Analytics - Admin can VIEW only (no edit/reorder) */}
           <div 
-            className={`nav-item ${activeTab === 'ai-analytics' ? 'active' : ''}`}
-            onClick={() => setActiveTab('ai-analytics')}
+            className={`nav-item ${activeTab === 'overview' ? 'active' : ''}`}
+            onClick={() => setActiveTab('overview')}
           >
             <svg className="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M12 16v-4"/>
-              <path d="M12 8h.01"/>
+              <rect x="3" y="3" width="7" height="7"/>
+              <rect x="14" y="3" width="7" height="7"/>
+              <rect x="14" y="14" width="7" height="7"/>
+              <rect x="3" y="14" width="7" height="7"/>
             </svg>
             <span className="nav-text">AI Analytics</span>
           </div>
@@ -1408,8 +1786,11 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
         <div className="dashboard-header">
           <div className="header-content">
             <div className="header-left">
-              <h1>Admin Dashboard</h1>
-              <p>Manage users, departments, and pharmacies across your organization</p>
+              <div className="admin-header-title-stack">
+                <h1>Admin Dashboard</h1>
+                <p className="admin-header-subtitle">Manage users, departments, and pharmacies across your organization</p>
+                <span className="admin-header-date">{new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -1456,14 +1837,64 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
         )}
 
         <div className="dashboard-body">
-          {/* Stats Cards - only show on Users tab */}
-          {activeTab === 'users' && renderStatsCards()}
+          {/* Stats Cards - Show ONLY on Users tab */}
+          {activeTab === 'users' && (
+            <div className="admin-stats-cards-container">
+              <div className="admin-stat-card-modern">
+                <div className="stat-icon-modern">👥</div>
+                <div className="stat-details">
+                  <div className="stat-number-modern">{stats.totalUsers}</div>
+                  <div className="stat-label-modern">Total Users</div>
+                </div>
+              </div>
+
+              <div className="admin-stat-card-modern">
+                <div className="stat-icon-modern">🏢</div>
+                <div className="stat-details">
+                  <div className="stat-number-modern">{stats.totalDepartments}</div>
+                  <div className="stat-label-modern">Departments</div>
+                </div>
+              </div>
+
+              <div className="admin-stat-card-modern">
+                <div className="stat-icon-modern">💊</div>
+                <div className="stat-details">
+                  <div className="stat-number-modern">{stats.totalPharmacies}</div>
+                  <div className="stat-label-modern">Pharmacies</div>
+                </div>
+              </div>
+
+              <div className="admin-stat-card-modern">
+                <div className="stat-icon-modern">📦</div>
+                <div className="stat-details">
+                  <div className="stat-number-modern">{stats.totalSuppliers}</div>
+                  <div className="stat-label-modern">Suppliers</div>
+                </div>
+              </div>
+
+              <div className="admin-stat-card-modern">
+                <div className="stat-icon-modern">👤</div>
+                <div className="stat-details">
+                  <div className="stat-number-modern">{stats.totalCustomers}</div>
+                  <div className="stat-label-modern">Customers</div>
+                </div>
+              </div>
+
+              <div className="admin-stat-card-modern">
+                <div className="stat-icon-modern">💼</div>
+                <div className="stat-details">
+                  <div className="stat-number-modern">{stats.totalProducts}</div>
+                  <div className="stat-label-modern">Products</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* AI Analytics - Admin VIEW ONLY */}
+          {activeTab === 'overview' && renderAIAnalytics()}
 
           {/* Content Section */}
-          {activeTab === 'ai-analytics' ? (
-            // AI Analytics - no header, just render the content
-            renderAIAnalytics()
-          ) : (
+          {activeTab === 'overview' ? null : (
             <div className="admin-content-section">
               <div className="admin-content-header">
                 <h2>
@@ -1523,12 +1954,13 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
                 <CustomersPage />
               ) : (
                 <div className="admin-management-container">
-                  <div className="admin-search-bar">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <div className="admin-search-container">
+                    <svg className="search-icon-modern" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                       <circle cx="11" cy="11" r="8"/>
                       <line x1="21" y1="21" x2="16.65" y2="16.65"/>
                     </svg>
                     <input 
+                      className="admin-search-input-modern"
                       type="text" 
                       placeholder={`Search ${activeTab}...`} 
                       value={searchQuery}

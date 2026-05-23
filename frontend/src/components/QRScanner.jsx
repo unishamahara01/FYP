@@ -826,7 +826,11 @@ const QRScanner = ({ onScan, onClose, isOpen }) => {
     e.preventDefault();
     if (manualInput.trim()) {
       setDebugInfo('📝 Using manual input: ' + manualInput.trim());
+      setError(''); // Clear any previous errors
       handleQRDetected(manualInput.trim());
+    } else {
+      setError('Please enter a product ID or batch number');
+      setDebugInfo('❌ Empty manual input');
     }
   };
 

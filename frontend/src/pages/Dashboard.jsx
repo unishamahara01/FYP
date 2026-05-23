@@ -34,7 +34,6 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
   // Low Stock Notification state
   const [lowStockItems, setLowStockItems] = useState(null);
   const [showLowStockAlert, setShowLowStockAlert] = useState(false);
-  const [sendingAlert, setSendingAlert] = useState(false);
   
   // Top Products state
   const [topProducts, setTopProducts] = useState([]);
@@ -68,9 +67,18 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
   const [showOrderModal, setShowOrderModal] = useState(false);
   const [newOrder, setNewOrder] = useState({
     customerName: '',
+    customerId: '',
+    customerPhone: '',
+    customerEmail: '',
+    customerCity: '',
     items: [{ product: '', quantity: 1 }],
-    paymentMethod: 'Cash'
+    paymentMethod: 'Cash',
+    customerLoyalty: null,
+    isNewCustomer: false
   });
+
+  // Customers state for order creation
+  const [customersForOrder, setCustomersForOrder] = useState([]);
 
   // Customers state
   const [customers, setCustomers] = useState([]);
@@ -129,8 +137,28 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
 
   // Fetch dashboard data on mount
   useEffect(() => {
-    fetchDashboardData();
-    fetchProducts();
+    // Check if this is an eSewa callback - if so, don't load data yet
+    const urlParams = new URLSearchParams(window.location.search);
+    const esewaStatus = urlParams.get('esewa');
+    
+    if (!esewaStatus) {
+      // Only fetch data if NOT an eSewa callback
+      fetchDashboardData();
+      fetchProducts();
+      fetchCustomers(); // Fetch customers for loyalty points
+    } else {
+      // If eSewa callback, stop loading immediately
+      setLoading(false);
+    }
+  }, []);
+
+  // Periodic refresh for low stock items (every 30 seconds)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchLowStockItems();
+    }, 30000); // 30 seconds
+
+    return () => clearInterval(interval); // Cleanup on unmount
   }, []);
 
   // eSewa Payment Response Handler
@@ -138,17 +166,50 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
     const urlParams = new URLSearchParams(window.location.search);
     const status = urlParams.get('esewa');
     const orderId = urlParams.get('oid');
+    const error = urlParams.get('error');
 
-    if (status === 'success') {
-      alert(`✅ eSewa Payment Successful!\nOrder ID: ${orderId}\nYour order has been confirmed.`);
+    // If there's an eSewa callback, stop loading immediately and show alert
+    if (status) {
+      // Stop loading spinner immediately
+      setLoading(false);
+      
       // Clean URL
       window.history.replaceState({}, document.title, window.location.pathname);
-      if (typeof fetchOrders === 'function') fetchOrders();
-      if (typeof fetchDashboardData === 'function') fetchDashboardData();
-    } else if (status === 'failed') {
-      const error = urlParams.get('error');
-      alert(`❌ eSewa Payment Failed: ${error || 'User cancelled or transaction failed'}`);
-      window.history.replaceState({}, document.title, window.location.pathname);
+      
+      // Show alert after a brief delay to ensure page is rendered
+      setTimeout(() => {
+        if (status === 'success') {
+          alert(`✅ eSewa Payment Successful!\nOrder ID: ${orderId}\nYour order has been confirmed.`);
+          // Refresh data after success
+          fetchOrders();
+          fetchDashboardData();
+        } else if (status === 'failed') {
+          // Show user-friendly error message based on error type
+          let errorMessage = '';
+          
+          switch(error) {
+            case 'server_error':
+              errorMessage = 'Payment server encountered an error. Please try again later or contact support.';
+              break;
+            case 'cancelled':
+              errorMessage = 'Payment was cancelled. You can try again when ready.';
+              break;
+            case 'no_data':
+              errorMessage = 'Payment verification failed - no data received from eSewa.';
+              break;
+            case 'invalid_data':
+              errorMessage = 'Payment data is invalid. Please contact support.';
+              break;
+            case 'order_not_found':
+              errorMessage = 'Order not found in system. Please contact support.';
+              break;
+            default:
+              errorMessage = error || 'Payment failed. Please try again.';
+          }
+          
+          alert(`❌ eSewa Payment Failed\n\n${errorMessage}\n\nYou can:\n• Try again with eSewa\n• Use Cash payment instead\n• Contact support if issue persists`);
+        }
+      }, 300); // Brief delay for page render
     }
   }, []);
 
@@ -174,70 +235,121 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
         return;
       }
       
-      // Fetch stats
-      const statsRes = await fetch('http://localhost:3001/api/dashboard/stats', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      // Cache-busting timestamp
+      const cacheBuster = new Date().getTime();
       
-      if (!statsRes.ok) {
-        throw new Error(`Stats API failed: ${statsRes.status}`);
+      // 1. Fetch stats (with cache-busting)
+      try {
+        const statsRes = await fetch(`http://localhost:3001/api/dashboard/stats?t=${cacheBuster}`, {
+          headers: { 
+            Authorization: `Bearer ${token}`,
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+          }
+        });
+        
+        if (!statsRes.ok) {
+          throw new Error(`Stats API failed: ${statsRes.status}`);
+        }
+        
+        const statsData = await statsRes.json();
+        setStats(statsData || {
+          totalSKUs: 0,
+          expiringItems: 0,
+          predictedShortages: 0,
+          todaysSales: 0
+        });
+      } catch (err) {
+        console.error('Error fetching dashboard stats:', err);
+        setStats({
+          totalSKUs: 0,
+          expiringItems: 0,
+          predictedShortages: 0,
+          todaysSales: 0
+        });
+      }
+
+      // 2. Fetch sales forecast (with cache-busting)
+      try {
+        const salesRes = await fetch(`http://localhost:3001/api/sales/forecast?t=${cacheBuster}`, {
+          headers: { 
+            Authorization: `Bearer ${token}`,
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+          }
+        });
+        if (salesRes.ok) {
+          const salesForecast = await salesRes.json();
+          setSalesData(Array.isArray(salesForecast) ? salesForecast : []);
+        } else {
+          console.warn(`Sales forecast API returned non-ok: ${salesRes.status}`);
+          setSalesData([]);
+        }
+      } catch (err) {
+        console.error('Error fetching sales forecast:', err);
+        setSalesData([]);
+      }
+
+      // 3. Fetch AI Expiry Predictions (non-awaited)
+      try {
+        fetchAIPredictions();
+      } catch (err) {
+        console.error('Error initiating AI predictions fetch:', err);
       }
       
-      const statsData = await statsRes.json();
-      setStats(statsData || {
-        totalSKUs: 0,
-        expiringItems: 0,
-        predictedShortages: 0,
-        todaysSales: 0
-      });
-
-      // Fetch sales forecast
-      const salesRes = await fetch('http://localhost:3001/api/sales/forecast', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const salesForecast = await salesRes.json();
-      setSalesData(Array.isArray(salesForecast) ? salesForecast : []);
-
-      // Fetch AI Expiry Predictions
-      fetchAIPredictions();
+      // 4. Fetch Low Stock Items (non-awaited)
+      try {
+        fetchLowStockItems();
+      } catch (err) {
+        console.error('Error initiating low stock items fetch:', err);
+      }
       
-      // Fetch Low Stock Items
-      fetchLowStockItems();
+      // 5. Fetch Top Products
+      try {
+        const topProductsRes = await fetch('http://localhost:3001/api/dashboard/top-products', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (topProductsRes.ok) {
+          const topProductsData = await topProductsRes.json();
+          setTopProducts(Array.isArray(topProductsData) ? topProductsData : []);
+        } else {
+          console.warn(`Top products API returned non-ok: ${topProductsRes.status}`);
+          setTopProducts([]);
+        }
+      } catch (err) {
+        console.error('Error fetching top products:', err);
+        setTopProducts([]);
+      }
       
-      // Fetch Top Products
-      const topProductsRes = await fetch('http://localhost:3001/api/dashboard/top-products', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const topProductsData = await topProductsRes.json();
-      setTopProducts(Array.isArray(topProductsData) ? topProductsData : []);
-      
-      // Fetch Recent Activity
-      const activityRes = await fetch('http://localhost:3001/api/dashboard/recent-activity', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const activityData = await activityRes.json();
-      // Transform backend data to match frontend expectations
-      const transformedActivity = Array.isArray(activityData) ? activityData.map(activity => ({
-        type: activity.type,
-        text: activity.description,
-        time: activity.timestamp,
-        icon: activity.type === 'order' ? 'order-icon' : 'default-icon'
-      })) : [];
-      setRecentActivity(transformedActivity);
+      // 6. Fetch Recent Activity
+      try {
+        const activityRes = await fetch('http://localhost:3001/api/dashboard/recent-activity', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (activityRes.ok) {
+          const activityData = await activityRes.json();
+          // Transform backend data to match frontend expectations
+          const transformedActivity = Array.isArray(activityData) ? activityData.map(activity => ({
+            type: activity.type,
+            text: activity.description,
+            time: activity.timestamp,
+            icon: activity.type === 'order' ? 'order-icon' : 'default-icon'
+          })) : [];
+          setRecentActivity(transformedActivity);
+        } else {
+          console.warn(`Recent activity API returned non-ok: ${activityRes.status}`);
+          setRecentActivity([]);
+        }
+      } catch (err) {
+        console.error('Error fetching recent activity:', err);
+        setRecentActivity([]);
+      }
 
       setLoading(false);
     } catch (error) {
-      console.error('Error fetching dashboard data:', error);
-      // Set safe defaults
-      setStats({
-        totalSKUs: 0,
-        expiringItems: 0,
-        predictedShortages: 0,
-        todaysSales: 0
-      });
-      setTopProducts([]);
-      setRecentActivity([]);
-      setSalesData([]);
+      console.error('Critical error in fetchDashboardData:', error);
       setLoading(false);
     }
   };
@@ -285,7 +397,27 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
         console.log('⚠️ Expired products:', expiredProducts);
       }
       
-      setAiPredictions(data || { predictions: [] });
+      // Fetch reorder suggestions from Node backend
+      const token = localStorage.getItem('authToken');
+      const reorderRes = await fetch('http://localhost:3001/api/ai/reorder-suggestions', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      let reorderSuggestions = [];
+      if (reorderRes.ok) {
+        const reorderData = await reorderRes.json();
+        if (reorderData.success && reorderData.suggestions) {
+          reorderSuggestions = reorderData.suggestions;
+          console.log('📦 Reorder suggestions received:', reorderSuggestions.length);
+        }
+      }
+      
+      // Combine expiry predictions with reorder suggestions
+      setAiPredictions({ 
+        ...data, 
+        predictions: data.predictions || [],
+        reorder_suggestions: reorderSuggestions
+      });
       
       // Fetch demand predictions
       const demandRes = await fetch('http://localhost:5001/predict/demand');
@@ -423,6 +555,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
         alert(`✅ ${productName} has been disposed successfully! Quantity set to 0.`);
         fetchAIPredictions();
         fetchProducts();
+        fetchLowStockItems(); // Update low stock count
       } else {
         alert(`❌ Failed to dispose product: ${data.message || 'Unknown error'}`);
       }
@@ -447,29 +580,6 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
     }
   };
 
-  const sendLowStockAlert = async () => {
-    try {
-      setSendingAlert(true);
-      const token = localStorage.getItem('authToken');
-      const res = await fetch('http://localhost:3001/api/inventory/send-low-stock-alert', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      
-      if (data.success) {
-        alert(`✅ ${data.message}\nEmails sent: ${data.emailsSent}/${data.totalRecipients}`);
-      } else {
-        alert(`❌ ${data.message}`);
-      }
-    } catch (error) {
-      console.error('Error sending low stock alert:', error);
-      alert('❌ Failed to send low stock alert');
-    } finally {
-      setSendingAlert(false);
-    }
-  };
-
   const fetchProducts = async () => {
     try {
       setProductsLoading(true);
@@ -483,6 +593,56 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
     } catch (error) {
       console.error('Error fetching products:', error);
       setProductsLoading(false);
+    }
+  };
+
+  // Calculate aggregated status for products (considers all batches of same product)
+  const getAggregatedStatus = (product, allProducts) => {
+    // First check if THIS specific batch is expired
+    const today = new Date();
+    const daysUntilExpiry = product.expiryDate ? Math.ceil((new Date(product.expiryDate) - today) / (1000 * 60 * 60 * 24)) : 999;
+    
+    // If this batch is expired, return Expired status
+    if (product.status === 'Expired' || daysUntilExpiry < 0) {
+      return 'Expired';
+    }
+    
+    // Find all batches of the same product name
+    const sameNameProducts = allProducts.filter(p => p.name === product.name);
+    
+    // Calculate total active quantity (excluding expired batches)
+    const activeBatches = sameNameProducts.filter(p => {
+      if (p.status === 'Expired') return false;
+      if (p.expiryDate && new Date(p.expiryDate) < today) return false;
+      return true;
+    });
+    
+    const totalActiveQuantity = activeBatches.reduce((sum, p) => sum + p.quantity, 0);
+    const maxReorderLevel = Math.max(...sameNameProducts.map(p => p.reorderLevel || 50));
+    
+    // Return aggregated status based on total active quantity
+    if (totalActiveQuantity === 0) return 'Out of Stock';
+    if (totalActiveQuantity <= maxReorderLevel) return 'Low Stock';
+    
+    // Check if this specific batch is expiring soon
+    if (daysUntilExpiry <= 90) return 'Expiring Soon';
+    
+    return 'In Stock';
+  };
+
+  const fetchCustomers = async () => {
+    try {
+      setCustomersLoading(true);
+      const token = localStorage.getItem('authToken');
+      const res = await fetch('http://localhost:3001/api/customers', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      setCustomers(Array.isArray(data) ? data : []);
+      setCustomersLoading(false);
+    } catch (error) {
+      console.error('Error fetching customers:', error);
+      setCustomersLoading(false);
     }
   };
 
@@ -507,7 +667,6 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
     }
   };
 
-  // QR Scanner Functions
   const handleQRScan = async (qrData) => {
     try {
       console.log('🔍 QR Scanned:', qrData);
@@ -523,8 +682,12 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
       console.log('📡 Sending QR lookup request to backend...');
       console.log('🔑 Using auth token:', token ? 'Present' : 'Missing');
       
-      // Send the entire qrData so backend can use batchNumber if ID fails
+      // Convert qrData to string if it's an object
       let dataToSend = qrData;
+      if (typeof qrData === 'object' && qrData !== null) {
+        // If it's an object with an id property, use that
+        dataToSend = qrData.id || JSON.stringify(qrData);
+      }
       
       const res = await fetch('http://localhost:3001/api/products/qr-lookup', {
         method: 'POST',
@@ -559,7 +722,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
         // Show quantity dialog instead of using prompt()
         console.log('✅ Product found, showing quantity dialog');
         setFoundProduct(result.product);
-        setPendingQRData(qrData);
+        setPendingQRData(dataToSend); // Use the string version
         setQuantityToAdd('1'); // Default quantity
         setShowQuantityDialog(true);
       } else {
@@ -588,7 +751,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
           Authorization: `Bearer ${token}`
         },
         body: JSON.stringify({ 
-          qrData: typeof qrData === 'string' ? qrData : JSON.stringify(qrData), 
+          qrData, 
           quantity 
         })
       });
@@ -613,9 +776,12 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
       console.log('✅ QR add result:', result);
       
       if (result.success) {
+        // Refresh product list FIRST
+        await fetchProducts();
+        await fetchDashboardData();
+        
+        // Then show success message
         alert(`✅ ${result.message}`);
-        fetchProducts(); // Refresh product list
-        fetchDashboardData(); // Refresh dashboard stats
       } else {
         alert(`❌ Error: ${result.message}`);
       }
@@ -755,6 +921,21 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
     }
   };
 
+  const fetchCustomersForOrder = async () => {
+    try {
+      const token = localStorage.getItem('authToken');
+      const res = await fetch('http://localhost:3001/api/customers', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCustomersForOrder(Array.isArray(data) ? data : []);
+      }
+    } catch (error) {
+      console.error('Error fetching customers:', error);
+    }
+  };
+
   const fetchOrders = async () => {
     try {
       console.log("📋 Fetching orders...");
@@ -787,32 +968,60 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
     
     try {
       const token = localStorage.getItem('authToken');
+      
+      // Remove customerLoyalty from the order data before sending
+      const orderData = {
+        customerName: newOrder.customerName,
+        customerPhone: newOrder.customerPhone || undefined,
+        customerEmail: newOrder.customerEmail || undefined,
+        customerCity: newOrder.customerCity || undefined,
+        items: newOrder.items,
+        paymentMethod: newOrder.paymentMethod
+      };
+      
+      console.log('📦 Creating order:', orderData);
+      
       const res = await fetch('http://localhost:3001/api/orders', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify(newOrder)
+        body: JSON.stringify(orderData)
       });
       
+      console.log('📦 Order response status:', res.status);
       const result = await res.json();
+      console.log('📦 Order response:', result);
       
       if (res.ok) {
+        console.log('✅ Order created successfully!');
         setOrderSuccess(true);
         setOrderProcessing(false);
+        
+        // Add the new order to the TOP of the list immediately
+        if (result.order) {
+          setOrders(prevOrders => [result.order, ...prevOrders]);
+        }
         
         // Show success for 2 seconds before closing
         setTimeout(() => {
           setShowOrderModal(false);
           setOrderSuccess(false);
-          fetchOrders();
-          fetchDashboardData();
-          fetchProducts();
+          console.log('✅ Order added to top of list');
+          fetchDashboardData(); // Update dashboard stats
+          fetchProducts(); // Update product quantities
+          fetchLowStockItems(); // Update low stock count
           setNewOrder({
             customerName: '',
+            customerId: '',
+            customerPhone: '',
+            customerEmail: '',
+            customerCity: '',
             items: [{ product: '', quantity: 1 }],
-            paymentMethod: 'Cash'
+            paymentMethod: 'Cash',
+            customerLoyalty: null,
+            isNewCustomer: false
           });
         }, 2000);
       } else {
@@ -863,20 +1072,8 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
         }
         return renderSuppliers();
       case 'customers':
-        // Restrict customers section for Pharmacist and Staff users
-        if (isPharmacist) {
-          setActiveSection('dashboard');
-          return renderDashboard();
-        }
+        // Allow both Admin and Pharmacist to view customers and loyalty info
         return renderCustomers();
-      case 'procurement':
-        return (
-          <ProcurementView 
-            purchaseOrders={purchaseOrders} 
-            createPurchaseRequest={createPurchaseRequest} 
-            fulfillOrder={fulfillOrder} 
-          />
-        );
       case 'ai-analytics':
         return renderAIAnalytics();
       default:
@@ -1223,7 +1420,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
                           {lowStockItems.outOfStock.length > 0 && (
                             <div className="stock-category">
                               <h5 style={{color: '#e53e3e', margin: '10px 0 5px 0', fontSize: '12px'}}>OUT OF STOCK</h5>
-                              {lowStockItems.outOfStock.slice(0, 3).map((product, index) => (
+                              {lowStockItems.outOfStock.map((product, index) => (
                                 <div key={index} className="stock-item critical">
                                   <span className="item-name">{product.name}</span>
                                   <span className="item-batch">({product.batchNumber})</span>
@@ -1235,7 +1432,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
                           {lowStockItems.lowStock.length > 0 && (
                             <div className="stock-category">
                               <h5 style={{color: '#ed8936', margin: '10px 0 5px 0', fontSize: '12px'}}>LOW STOCK</h5>
-                              {lowStockItems.lowStock.slice(0, 3).map((product, index) => (
+                              {lowStockItems.lowStock.map((product, index) => (
                                 <div key={index} className="stock-item warning">
                                   <span className="item-name">{product.name}</span>
                                   <span className="item-qty">Qty: {product.quantity}</span>
@@ -1279,34 +1476,6 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
                       </p>
                     </div>
                   )}
-                </div>
-              </div>
-
-              {/* AI INVENTORY OPTIMIZATION */}
-              <div className="sidebar-card ai-optimization-card">
-                <div className="sidebar-card-header">
-                  <div className="ai-badge-small">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
-                      <line x1="8" y1="21" x2="16" y2="21"/>
-                      <line x1="12" y1="17" x2="12" y2="21"/>
-                    </svg>
-                    AI Inventory Optimization
-                  </div>
-                </div>
-                <div className="sidebar-card-content">
-                  <p className="optimization-text">AI identified optimization opportunities for your inventory</p>
-                  <div className="optimization-stats">
-                    <div className="opt-stat">
-                      <span className="opt-number">12</span>
-                      <span className="opt-label">Reorder Suggestions</span>
-                    </div>
-                    <div className="opt-stat">
-                      <span className="opt-number">5</span>
-                      <span className="opt-label">Overstocked Items</span>
-                    </div>
-                  </div>
-                  <button className="sidebar-btn">View Optimization Plan</button>
                 </div>
               </div>
 
@@ -1372,7 +1541,10 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
         <p className="section-subtitle">Create and manage customer orders</p>
       </div>
 
-      <button className="add-btn" onClick={() => setShowOrderModal(true)}>
+      <button className="add-btn" onClick={() => {
+        fetchCustomersForOrder();
+        setShowOrderModal(true);
+      }}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <line x1="12" y1="5" x2="12" y2="19"/>
           <line x1="5" y1="12" x2="19" y2="12"/>
@@ -1485,16 +1657,251 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
                    <div className="spinner"></div>
                 </div>
               )}
+              {/* Hybrid Customer Selection: Dropdown OR Text Input */}
               <div className="form-group">
                 <label>Customer Name *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Enter customer name"
-                  value={newOrder.customerName}
-                  onChange={(e) => setNewOrder({...newOrder, customerName: e.target.value})}
-                />
+                
+                {/* Dropdown Mode (Default) */}
+                {!newOrder.isNewCustomer && (
+                  <select
+                    required
+                    value={newOrder.customerId || ''}
+                    onChange={(e) => {
+                      if (e.target.value === '__NEW__') {
+                        // Switch to text input mode
+                        setNewOrder({
+                          ...newOrder,
+                          isNewCustomer: true,
+                          customerId: '',
+                          customerName: '',
+                          customerLoyalty: null,
+                          customerPhone: '',
+                          customerEmail: ''
+                        });
+                      } else if (e.target.value) {
+                        // Existing customer selected
+                        const selected = customersForOrder.find(c => c._id === e.target.value);
+                        setNewOrder({
+                          ...newOrder,
+                          customerId: e.target.value,
+                          customerName: selected.fullName,
+                          customerLoyalty: selected,
+                          customerPhone: selected.phone || '',
+                          customerEmail: selected.email || ''
+                        });
+                      } else {
+                        // Cleared selection
+                        setNewOrder({
+                          ...newOrder,
+                          customerId: '',
+                          customerName: '',
+                          customerLoyalty: null,
+                          customerPhone: '',
+                          customerEmail: ''
+                        });
+                      }
+                    }}
+                    style={{
+                      padding: '12px',
+                      fontSize: '14px',
+                      border: '2px solid #e2e8f0',
+                      borderRadius: '8px',
+                      width: '100%'
+                    }}
+                  >
+                    <option value="">Select existing customer</option>
+                    <option value="__NEW__" style={{fontWeight: 'bold', color: '#667eea'}}>
+                      ➕ New Customer (Type Name)
+                    </option>
+                    <option disabled>──────────────────</option>
+                    {customersForOrder.map(customer => (
+                      <option key={customer._id} value={customer._id}>
+                        {customer.fullName} - {customer.loyaltyTier || 'Silver'} ({customer.loyaltyPoints || 0} pts)
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {/* Text Input Mode (New Customer) */}
+                {newOrder.isNewCustomer && (
+                  <div style={{display: 'flex', gap: '10px', alignItems: 'center'}}>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Enter new customer name"
+                      value={newOrder.customerName}
+                      onChange={(e) => setNewOrder({...newOrder, customerName: e.target.value})}
+                      style={{
+                        flex: 1,
+                        padding: '12px',
+                        fontSize: '14px',
+                        border: '2px solid #667eea',
+                        borderRadius: '8px'
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewOrder({
+                          ...newOrder,
+                          isNewCustomer: false,
+                          customerName: '',
+                          customerId: '',
+                          customerLoyalty: null,
+                          customerPhone: '',
+                          customerEmail: ''
+                        });
+                      }}
+                      style={{
+                        padding: '12px 16px',
+                        backgroundColor: '#f1f5f9',
+                        border: '2px solid #cbd5e1',
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        fontWeight: '500',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      ← Back to List
+                    </button>
+                  </div>
+                )}
+
+                {/* Helper Text */}
+                <div style={{
+                  fontSize: '12px',
+                  color: '#64748b',
+                  marginTop: '8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}>
+                  {newOrder.isNewCustomer ? (
+                    <>
+                      <span>✍️</span>
+                      <span>Typing new customer name - will be auto-created with Silver tier</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>💡</span>
+                      <span>Select existing customer or choose "New Customer" to type a name</span>
+                    </>
+                  )}
+                </div>
               </div>
+
+              {/* Optional Customer Details (Phone & Email) - Only for new customers or customers with N/A phone */}
+              {(newOrder.isNewCustomer || (newOrder.customerLoyalty && newOrder.customerLoyalty.phone === 'N/A')) && (
+                <div className="form-group" style={{
+                  backgroundColor: '#f8fafc',
+                  border: '2px dashed #cbd5e1',
+                  borderRadius: '8px',
+                  padding: '15px',
+                  marginBottom: '15px'
+                }}>
+                  <label style={{color: '#475569', fontSize: '13px', marginBottom: '10px', display: 'block'}}>
+                    📞 Customer Contact Details (Optional)
+                  </label>
+                  <div style={{display: 'flex', gap: '10px', flexDirection: 'column'}}>
+                    <input
+                      type="tel"
+                      placeholder="Phone Number (optional)"
+                      value={newOrder.customerPhone}
+                      onChange={(e) => setNewOrder({...newOrder, customerPhone: e.target.value})}
+                      style={{
+                        padding: '10px',
+                        border: '1px solid #cbd5e1',
+                        borderRadius: '6px',
+                        fontSize: '14px'
+                      }}
+                    />
+                    <input
+                      type="email"
+                      placeholder="Email Address (optional)"
+                      value={newOrder.customerEmail}
+                      onChange={(e) => setNewOrder({...newOrder, customerEmail: e.target.value})}
+                      style={{
+                        padding: '10px',
+                        border: '1px solid #cbd5e1',
+                        borderRadius: '6px',
+                        fontSize: '14px'
+                      }}
+                    />
+                    <input
+                      type="text"
+                      placeholder="City (optional) - e.g., Kathmandu, Pokhara"
+                      value={newOrder.customerCity}
+                      onChange={(e) => setNewOrder({...newOrder, customerCity: e.target.value})}
+                      style={{
+                        padding: '10px',
+                        border: '1px solid #cbd5e1',
+                        borderRadius: '6px',
+                        fontSize: '14px'
+                      }}
+                    />
+                  </div>
+                  <div style={{fontSize: '11px', color: '#64748b', marginTop: '8px'}}>
+                    💡 Adding contact details helps with order tracking and notifications
+                  </div>
+                </div>
+              )}
+
+              {/* Loyalty Card Display - Only for existing customers */}
+              {newOrder.customerLoyalty && !newOrder.isNewCustomer && (
+                <div className="form-group" style={{
+                  background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                  borderRadius: '12px',
+                  padding: '20px',
+                  color: 'white',
+                  marginBottom: '20px',
+                  boxShadow: '0 4px 15px rgba(102, 126, 234, 0.4)'
+                }}>
+                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px'}}>
+                    <div>
+                      <div style={{fontSize: '12px', opacity: 0.9, marginBottom: '5px'}}>LOYALTY MEMBER</div>
+                      <div style={{fontSize: '20px', fontWeight: 'bold'}}>{newOrder.customerLoyalty.fullName}</div>
+                    </div>
+                    <div style={{fontSize: '32px'}}>
+                      {newOrder.customerLoyalty.loyaltyTier === 'Platinum' && '💎'}
+                      {newOrder.customerLoyalty.loyaltyTier === 'Gold' && '🥇'}
+                      {newOrder.customerLoyalty.loyaltyTier === 'Silver' && '🥈'}
+                      {(!newOrder.customerLoyalty.loyaltyTier || newOrder.customerLoyalty.loyaltyTier === 'Bronze') && '🥉'}
+                    </div>
+                  </div>
+                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                    <div>
+                      <div style={{fontSize: '12px', opacity: 0.9}}>TIER</div>
+                      <div style={{fontSize: '18px', fontWeight: 'bold'}}>
+                        {newOrder.customerLoyalty.loyaltyTier || 'Silver'}
+                      </div>
+                    </div>
+                    <div style={{textAlign: 'right'}}>
+                      <div style={{fontSize: '12px', opacity: 0.9}}>POINTS</div>
+                      <div style={{fontSize: '24px', fontWeight: 'bold'}}>
+                        {newOrder.customerLoyalty.loyaltyPoints || 0}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{
+                    marginTop: '15px',
+                    paddingTop: '15px',
+                    borderTop: '1px solid rgba(255,255,255,0.3)',
+                    fontSize: '12px',
+                    opacity: 0.9
+                  }}>
+                    💰 This order will earn +{Math.floor((newOrder.items.reduce((sum, item) => {
+                      const product = products.find(p => p._id === item.product);
+                      const price = product 
+                        ? (product.isPromoted && product.discountPercentage > 0 
+                            ? Math.round(product.price * (1 - product.discountPercentage / 100)) 
+                            : product.price)
+                        : 0;
+                      return sum + (price * (item.quantity || 0));
+                    }, 0)) / 100)} points
+                  </div>
+                </div>
+              )}
 
               <div className="form-group">
                 <label>Payment Method *</label>
@@ -1542,7 +1949,11 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
                     }}>
                       Rs. {newOrder.items.reduce((sum, item) => {
                         const product = products.find(p => p._id === item.product);
-                        const price = product ? product.price : 0;
+                        const price = product 
+                          ? (product.isPromoted && product.discountPercentage > 0 
+                              ? Math.round(product.price * (1 - product.discountPercentage / 100)) 
+                              : product.price)
+                          : 0;
                         const quantity = item.quantity || 0;
                         return sum + (quantity * price);
                       }, 0).toLocaleString()}
@@ -1554,7 +1965,12 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
                   {(() => {
                     const totalAmount = newOrder.items.reduce((sum, item) => {
                       const product = products.find(p => p._id === item.product);
-                      return sum + ((item.quantity || 0) * (product ? product.price : 0));
+                      const price = product 
+                        ? (product.isPromoted && product.discountPercentage > 0 
+                            ? Math.round(product.price * (1 - product.discountPercentage / 100)) 
+                            : product.price)
+                        : 0;
+                      return sum + ((item.quantity || 0) * price);
                     }, 0);
                     
                     const qrPayload = `https://esewa.com.np/#/pay?merchant=EPAYTEST&amt=${totalAmount}&pid=ORD-PQ-${Date.now()}`;
@@ -1744,7 +2160,9 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
                           setNewOrder({ ...newOrder, items: newItems });
                         }}
                         placeholder="Select Product"
-                        options={Array.isArray(products) ? products.filter(p => p.quantity > 0).map(p => {
+                        options={Array.isArray(products) ? products
+                          .filter(p => p.quantity > 0 && p.status !== 'Expired')
+                          .map(p => {
                           const promoPrice = p.isPromoted && p.discountPercentage > 0 
                             ? Math.round(p.price * (1 - p.discountPercentage / 100)) 
                             : null;
@@ -1979,8 +2397,8 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
                     <td>₨{Math.round(product.price)}</td>
                     <td>{new Date(product.expiryDate).toLocaleDateString()}</td>
                     <td>
-                      <span className={`status-badge ${product.status.toLowerCase().replace(' ', '-')}`}>
-                        {product.status}
+                      <span className={`status-badge ${getAggregatedStatus(product, products).toLowerCase().replace(' ', '-')}`}>
+                        {getAggregatedStatus(product, products)}
                       </span>
                     </td>
                     <td>
@@ -2315,45 +2733,42 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
             className={`ai-tab ${aiActiveTab === 'demand' ? 'active' : ''}`}
             onClick={() => setAiActiveTab('demand')}
           >
-            📊 Demand Forecast
+            � Demand Forecast & Reorder
           </button>
         </div>
 
         {/* Expiry Prediction Tab */}
         {aiActiveTab === 'expiry' && (
           <>
-            {/* Summary Cards */}
             {aiPredictions && aiPredictions.predictions && aiPredictions.predictions.length > 0 ? (
               <>
                 <div className="ai-summary-cards">
                   <div className="ai-summary-card critical">
                     <div className="ai-summary-number">{aiPredictions.criticalRisk || 0}</div>
-                    <div className="ai-summary-label">CRITICAL RISK ITEMS</div>
+                    <div className="ai-summary-label">CRITICAL RISK</div>
                   </div>
                   <div className="ai-summary-card high">
                     <div className="ai-summary-number">{aiPredictions.highRisk || 0}</div>
-                    <div className="ai-summary-label">HIGH RISK ITEMS</div>
+                    <div className="ai-summary-label">HIGH RISK</div>
                   </div>
                   <div className="ai-summary-card value">
                     <div className="ai-summary-number">Rs {(aiPredictions.totalValueAtRisk || 0).toLocaleString()}</div>
-                    <div className="ai-summary-label">TOTAL VALUE AT RISK</div>
+                    <div className="ai-summary-label">VALUE AT RISK</div>
                   </div>
                 </div>
-
-                {/* Expiry Risk Table */}
                 <div className="dashboard-card" style={{marginTop: '24px'}}>
                   <div className="card-header">
-                    <h3>Top Items at Risk of Expiry</h3>
+                    <h3>⚠️ Expiry Risk Management</h3>
                   </div>
                   <div className="table-container">
                     <table className="expiry-risk-table">
                       <thead>
                         <tr>
                           <th>PRODUCT</th>
-                          <th>CURRENT STOCK</th>
+                          <th>STOCK</th>
                           <th>DAYS LEFT</th>
                           <th>RISK SCORE</th>
-                          <th>AI RECOMMENDATION</th>
+                          <th>RECOMMENDATION</th>
                           <th>PROMOTION</th>
                         </tr>
                       </thead>
@@ -2366,14 +2781,10 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
                                 <div className="product-batch">Batch: {pred.batchNumber}</div>
                               </div>
                             </td>
-                            <td>
-                              <div className="stock-cell">
-                                <div className="stock-units">{pred.currentStock} units</div>
-                              </div>
-                            </td>
+                            <td>{pred.currentStock} units</td>
                             <td>
                               <span className={`days-badge ${pred.daysUntilExpiry < 0 ? 'expired' : pred.daysUntilExpiry < 30 ? 'critical' : 'warning'}`}>
-                                {pred.daysUntilExpiry < 0 ? `${Math.abs(pred.daysUntilExpiry)} days` : `${pred.daysUntilExpiry} days`}
+                                {pred.daysUntilExpiry < 0 ? `Expired` : `${pred.daysUntilExpiry} days`}
                               </span>
                             </td>
                             <td>
@@ -2383,44 +2794,30 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
                                     className="risk-bar-fill" 
                                     style={{
                                       width: `${pred.riskScore}%`,
-                                      backgroundColor: pred.riskLevel === 'Critical' ? '#ef4444' : pred.riskLevel === 'High' ? '#f59e0b' : pred.riskLevel === 'Medium' ? '#eab308' : '#10b981'
+                                      backgroundColor: pred.riskLevel === 'Critical' ? '#ef4444' : pred.riskLevel === 'High' ? '#f59e0b' : '#eab308'
                                     }}
                                   ></div>
                                 </div>
-                                <span className="risk-score-text">{pred.riskScore}/100 ({pred.riskLevel})</span>
+                                <span className="risk-score-text">{pred.riskScore}/100</span>
                               </div>
                             </td>
                             <td>
                               <div className="recommendation-cell">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" style={{flexShrink: 0}}>
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2">
                                   <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-                                  <path d="M2 17l10 5 10-5"/>
-                                  <path d="M2 12l10 5 10-5"/>
                                 </svg>
                                 <span>{pred.recommendation}</span>
                               </div>
                             </td>
                             <td>
                               {pred.daysUntilExpiry < 0 ? (
-                                <button 
-                                  className="promo-btn dispose"
-                                  onClick={() => handleDisposeProduct(pred.productId, pred.productName)}
-                                >
+                                <button className="promo-btn dispose" onClick={() => handleDisposeProduct(pred.productId, pred.productName)}>
                                   🗑️ Dispose
                                 </button>
-                              ) : pred.currentStock === 0 ? (
-                                <span className="promo-status" style={{color: '#64748b'}}>
-                                  📦 Out of Stock
-                                </span>
                               ) : pred.isPromoted ? (
                                 <span className="promo-status active">
-                                  🟢 {pred.discountPercentage}% Active
-                                  <button 
-                                    className="promo-remove"
-                                    onClick={() => handleRemovePromotion(pred.productId)}
-                                  >
-                                    Remove Promo
-                                  </button>
+                                  🟢 {pred.discountPercentage}%
+                                  <button className="promo-remove" onClick={() => handleRemovePromotion(pred.productId)}>Remove</button>
                                 </span>
                               ) : pred.riskLevel === 'Critical' || pred.riskLevel === 'High' ? (
                                 <div className="promo-input-group">
@@ -2445,7 +2842,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
                                   </button>
                                 </div>
                               ) : (
-                                <span className="promo-status">No promotion</span>
+                                <span className="promo-status">No promo needed</span>
                               )}
                             </td>
                           </tr>
@@ -2455,158 +2852,303 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
                   </div>
                 </div>
               </>
-            ) : aiPredictions === null ? (
-              <div className="ai-empty-state-large">
-                <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="1.5">
-                  <circle cx="12" cy="12" r="10"/>
-                  <path d="M12 6v6l4 2"/>
-                </svg>
-                <h3>ML Backend Offline</h3>
-                <p>Start the ML server to see AI predictions</p>
-                <button className="sidebar-btn" style={{marginTop: '16px'}} onClick={fetchAIPredictions}>
-                  🔄 Retry Connection
-                </button>
-              </div>
             ) : (
-              <div className="ai-empty-state-large">
-                <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="1.5">
-                  <circle cx="12" cy="12" r="10"/>
-                  <path d="M12 6v6l4 2"/>
-                </svg>
-                <h3>No High-Risk Items</h3>
-                <p>All products are within safe expiry ranges!</p>
+              <div style={{padding: '40px', textAlign: 'center', color: '#64748b'}}>
+                <p>No expiry risks detected</p>
               </div>
             )}
           </>
         )}
 
-        {/* Demand Forecast Tab */}
+        {/* Demand Forecast & Reorder Tab - MERGED */}
         {aiActiveTab === 'demand' && (
           <>
             {/* Summary Cards */}
             <div className="ai-summary-cards">
               <div className="ai-summary-card high">
-                <div className="ai-summary-number">{demandPredictions.length > 0 ? demandPredictions.length : 0}</div>
+                <div className="ai-summary-number">{demandPredictions.length}</div>
                 <div className="ai-summary-label">PRODUCTS ANALYZED</div>
               </div>
               <div className="ai-summary-card critical">
-                <div className="ai-summary-number">{demandPredictions.filter(p => (p.predicted30DayDemand || 0) > 0).length}</div>
-                <div className="ai-summary-label">TRENDING PRODUCTS IDENTIFIED</div>
+                <div className="ai-summary-number">{demandPredictions.filter(p => p.stockoutRisk === 'High').length}</div>
+                <div className="ai-summary-label">HIGH PRIORITY</div>
               </div>
               <div className="ai-summary-card value">
                 <div className="ai-summary-number">
-                  {demandPredictions.length > 0 
-                    ? `${Math.round(demandPredictions.reduce((sum, p) => sum + (p.predicted30DayDemand || 0), 0) / demandPredictions.length)} units/mo`
-                    : '0 units/mo'
-                  }
+                  {demandPredictions.filter(p => p.stockoutRisk === 'High' || p.stockoutRisk === 'Medium').length}
                 </div>
-                <div className="ai-summary-label">AVG MONTHLY DEMAND</div>
+                <div className="ai-summary-label">REORDER NEEDED</div>
               </div>
             </div>
 
-            {/* Demand Forecast Table */}
+            {/* Unified Table */}
             <div className="dashboard-card" style={{marginTop: '24px'}}>
               <div className="card-header">
-                <h3>Top Forecasted Demand</h3>
+                <h3>📊 Demand Forecast & Intelligent Reorder Suggestions</h3>
+                <p style={{fontSize: '14px', color: '#64748b', marginTop: '4px'}}>
+                  Products sorted by priority - High-risk items with reorder suggestions shown first
+                </p>
               </div>
               {demandPredictions.length > 0 ? (
                 <div className="table-container">
                   <table className="expiry-risk-table">
                     <thead>
                       <tr>
-                        <th>PRODUCT (CATEGORY)</th>
+                        <th>PRIORITY</th>
+                        <th>PRODUCT</th>
                         <th>CURRENT STOCK</th>
-                        <th>PREDICTED 30 DAY DEMAND</th>
-                        <th>MARKET TREND</th>
+                        <th>30-DAY DEMAND</th>
                         <th>STOCKOUT RISK</th>
+                        <th>REORDER SUGGESTION</th>
+                        <th>ACTION</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {demandPredictions.slice(0, 10).map((prediction, index) => {
-                        const currentStock = prediction.currentStock || 0;
-                        const predictedDemand = prediction.predicted30DayDemand || 0;
-                        const stockoutRisk = prediction.stockoutRisk || 'Low';
-                        const daysUntilStockout = Math.floor(prediction.daysUntilStockout || 999);
-                        const avgDailySales = predictedDemand > 0 ? (predictedDemand / 30).toFixed(1) : 0;
-                        
-                        return (
-                          <tr key={index}>
-                            <td>
-                              <div className="product-cell">
-                                <div className="product-name-expiry">{prediction.productName}</div>
-                                <div className="product-batch">General</div>
-                              </div>
-                            </td>
-                            <td>
-                              <div className="stock-cell">
-                                <div className="stock-units">{currentStock} units</div>
-                                <div className="stock-value-text">Avg Sales: {avgDailySales} units/day</div>
-                              </div>
-                            </td>
-                            <td>
-                              <div className="stock-cell">
-                                <div className="stock-units" style={{color: '#2563eb', fontWeight: 700}}>{predictedDemand} units/mo</div>
-                                <div className="stock-value-text">Revenue: Rs {(predictedDemand * 50).toLocaleString()}</div>
-                              </div>
-                            </td>
-                            <td>
-                              <span className="days-badge" style={{
-                                background: stockoutRisk === 'High' ? '#fee2e2' : stockoutRisk === 'Medium' ? '#fef3c7' : '#dcfce7',
-                                color: stockoutRisk === 'High' ? '#dc2626' : stockoutRisk === 'Medium' ? '#d97706' : '#16a34a'
-                              }}>
-                                {stockoutRisk === 'High' ? 'Increasing' : stockoutRisk === 'Medium' ? 'Moderate' : 'Stable'}
-                              </span>
-                            </td>
-                            <td>
-                              <div className="recommendation-cell">
-                                {stockoutRisk === 'High' ? (
-                                  <>
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" style={{flexShrink: 0}}>
-                                      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-                                      <line x1="12" y1="9" x2="12" y2="13"/>
-                                      <line x1="12" y1="17" x2="12.01" y2="17"/>
-                                    </svg>
-                                    <span style={{color: '#ef4444', fontWeight: 600}}>Out in {daysUntilStockout} days</span>
-                                  </>
-                                ) : stockoutRisk === 'Medium' ? (
-                                  <>
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" style={{flexShrink: 0}}>
-                                      <circle cx="12" cy="12" r="10"/>
-                                      <line x1="12" y1="8" x2="12" y2="12"/>
-                                      <line x1="12" y1="16" x2="12.01" y2="16"/>
-                                    </svg>
-                                    <span style={{color: '#f59e0b', fontWeight: 600}}>Out in {daysUntilStockout} days</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2" style={{flexShrink: 0}}>
-                                      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-                                      <polyline points="22 4 12 14.01 9 11.01"/>
-                                    </svg>
-                                    <span style={{color: '#10b981', fontWeight: 600}}>Stock sufficient</span>
-                                  </>
+                      {demandPredictions
+                        .map(demand => {
+                          // Try to find matching reorder suggestion
+                          const reorder = aiPredictions?.reorder_suggestions?.find(
+                            r => r.productId === demand.productId || r.productName === demand.productName
+                          );
+                          
+                          // Check if this product already has a pending purchase order
+                          const hasPendingPO = purchaseOrders.some(
+                            po => po.status === 'Pending' && 
+                                  (po.product === demand.productId || po.productName === demand.productName)
+                          );
+                          
+                          // If no explicit reorder suggestion but product is high/medium risk, create one
+                          let finalReorder = reorder;
+                          if (!reorder && (demand.stockoutRisk === 'High' || demand.stockoutRisk === 'Medium')) {
+                            // Calculate suggested order quantity: enough to cover 30 days + safety stock
+                            const suggestedQty = Math.max(
+                              Math.ceil(demand.predicted30DayDemand - demand.currentStock + (demand.predicted30DayDemand * 0.2)),
+                              50 // Minimum order quantity
+                            );
+                            
+                            finalReorder = {
+                              productId: demand.productId,
+                              productName: demand.productName,
+                              suggestedOrderQty: suggestedQty,
+                              estimatedCost: suggestedQty * (demand.price || 30) // Use product price or default
+                            };
+                          }
+                          
+                          return {
+                            ...demand,
+                            reorder: finalReorder,
+                            hasPendingPO: hasPendingPO,
+                            priority: demand.stockoutRisk === 'High' ? 1 : demand.stockoutRisk === 'Medium' ? 2 : 3
+                          };
+                        })
+                        .sort((a, b) => a.priority - b.priority)
+                        .map((item, index) => {
+                          const daysOut = Math.floor(item.daysUntilStockout || 999);
+                          return (
+                            <tr key={index} style={{
+                              backgroundColor: 'white'
+                            }}>
+                              <td>
+                                {item.priority === 1 && (
+                                  <span style={{background: '#fee2e2', color: '#991b1b', padding: '4px 12px', borderRadius: '12px', fontSize: '12px', fontWeight: 700}}>
+                                    ⚠️ HIGH
+                                  </span>
                                 )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
+                                {item.priority === 2 && (
+                                  <span style={{background: '#fef3c7', color: '#92400e', padding: '4px 12px', borderRadius: '12px', fontSize: '12px', fontWeight: 700}}>
+                                    ⚡ MEDIUM
+                                  </span>
+                                )}
+                                {item.priority === 3 && (
+                                  <span style={{background: '#d1fae5', color: '#065f46', padding: '4px 12px', borderRadius: '12px', fontSize: '12px', fontWeight: 700}}>
+                                    ✅ LOW
+                                  </span>
+                                )}
+                              </td>
+                              <td>
+                                <div className="product-name-expiry">{item.productName}</div>
+                              </td>
+                              <td>{item.currentStock} units</td>
+                              <td style={{color: '#2563eb', fontWeight: 700}}>{item.predicted30DayDemand} units</td>
+                              <td>
+                                {item.stockoutRisk === 'High' ? (
+                                  <span style={{color: '#6366f1', fontWeight: 600}}>⚠️ Out in {daysOut} days</span>
+                                ) : item.stockoutRisk === 'Medium' ? (
+                                  <span style={{color: '#6366f1', fontWeight: 600}}>⚡ Out in {daysOut} days</span>
+                                ) : (
+                                  <span style={{color: '#10b981', fontWeight: 600}}>✅ Sufficient</span>
+                                )}
+                              </td>
+                              <td>
+                                {item.hasPendingPO ? (
+                                  <div style={{background: '#e0f2fe', padding: '8px', borderRadius: '8px', border: '1px solid #7dd3fc'}}>
+                                    <div style={{fontSize: '14px', fontWeight: 600, color: '#0369a1'}}>
+                                      ✅ Order Placed
+                                    </div>
+                                    <div style={{fontSize: '12px', color: '#64748b'}}>
+                                      Check Pending Deliveries
+                                    </div>
+                                  </div>
+                                ) : item.reorder ? (
+                                  <div style={{background: '#eff6ff', padding: '8px', borderRadius: '8px', border: '1px solid #bfdbfe'}}>
+                                    <div style={{fontSize: '14px', fontWeight: 600, color: '#1e40af'}}>
+                                      Order: {item.reorder.suggestedOrderQty} units
+                                    </div>
+                                    <div style={{fontSize: '12px', color: '#64748b'}}>
+                                      Cost: Rs {item.reorder.estimatedCost?.toLocaleString()}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span style={{color: '#94a3b8'}}>No reorder needed</span>
+                                )}
+                              </td>
+                              <td>
+                                {item.hasPendingPO ? (
+                                  <span style={{color: '#0369a1', fontWeight: 600, fontSize: '14px'}}>
+                                    ✅ Order Placed
+                                  </span>
+                                ) : item.reorder ? (
+                                  <button 
+                                    className="promo-btn apply"
+                                    onClick={() => createPurchaseRequest(item.reorder)}
+                                    style={{background: '#6366f1', color: 'white'}}
+                                  >
+                                    🔄 Reorder
+                                  </button>
+                                ) : (
+                                  <span style={{color: '#94a3b8'}}>-</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
                     </tbody>
                   </table>
                 </div>
               ) : (
                 <div style={{padding: '40px', textAlign: 'center', color: '#64748b'}}>
-                  <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#cbd5e1" strokeWidth="1.5" style={{margin: '0 auto 16px'}}>
-                    <path d="M3 3v18h18"/>
-                    <path d="M18 17V9"/>
-                    <path d="M13 17V5"/>
-                    <path d="M8 17v-3"/>
-                  </svg>
-                  <p style={{fontSize: '16px', marginBottom: '8px'}}>No AI Demand Predictions Available</p>
-                  <p style={{fontSize: '14px', color: '#94a3b8'}}>Click "Train AI Model" to generate demand forecasts</p>
+                  <p>No predictions available - Click "Retrain & Refresh"</p>
                 </div>
               )}
             </div>
+
+            {/* Pending Deliveries Section */}
+            {purchaseOrders && purchaseOrders.filter(po => po.status === 'Pending').length > 0 && (
+              <div className="dashboard-card" style={{marginTop: '24px', background: '#eff6ff', border: '2px solid #bfdbfe'}}>
+                <div className="card-header" style={{background: '#dbeafe'}}>
+                  <h3>🚚 Pending Deliveries ({purchaseOrders.filter(po => po.status === 'Pending').length})</h3>
+                  <p style={{fontSize: '14px', color: '#1e40af', marginTop: '4px'}}>
+                    Track your purchase orders and confirm receipt when stock arrives
+                  </p>
+                </div>
+                <div className="table-container">
+                  <table className="expiry-risk-table">
+                    <thead>
+                      <tr>
+                        <th>PO NUMBER</th>
+                        <th>PRODUCT</th>
+                        <th>QUANTITY</th>
+                        <th>ESTIMATED COST</th>
+                        <th>ORDERED DATE</th>
+                        <th>ACTION</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {purchaseOrders
+                        .filter(po => po.status === 'Pending')
+                        .map((po) => (
+                          <tr key={po._id} style={{background: 'white'}}>
+                            <td>
+                              <span style={{fontWeight: 700, color: '#2563eb'}}>
+                                {po.poNumber || `PO-${po._id.slice(-6).toUpperCase()}`}
+                              </span>
+                            </td>
+                            <td>
+                              <div className="product-name-expiry">{po.productName}</div>
+                            </td>
+                            <td>
+                              <span style={{color: '#059669', fontWeight: 700}}>
+                                +{po.suggestedOrderQty} units
+                              </span>
+                            </td>
+                            <td>Rs {(po.estimatedCost || 0).toLocaleString()}</td>
+                            <td>{new Date(po.createdAt || po.orderDate).toLocaleDateString()}</td>
+                            <td>
+                              <button 
+                                className="promo-btn apply"
+                                onClick={() => fulfillOrder(po._id)}
+                                style={{background: '#16a34a', color: 'white'}}
+                              >
+                                ✅ Confirm Receipt
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Completed Deliveries Section */}
+            {purchaseOrders && purchaseOrders.filter(po => po.status === 'Received').length > 0 && (
+              <div className="dashboard-card" style={{marginTop: '24px'}}>
+                <div className="card-header">
+                  <h3>📜 Restock History (Last 10)</h3>
+                  <p style={{fontSize: '14px', color: '#64748b', marginTop: '4px'}}>
+                    Recently completed purchase orders
+                  </p>
+                </div>
+                <div className="table-container">
+                  <table className="expiry-risk-table" style={{opacity: 0.85}}>
+                    <thead>
+                      <tr>
+                        <th>PO NUMBER</th>
+                        <th>PRODUCT</th>
+                        <th>QUANTITY</th>
+                        <th>COST</th>
+                        <th>RECEIVED DATE</th>
+                        <th>STATUS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {purchaseOrders
+                        .filter(po => po.status === 'Received')
+                        .slice(0, 10)
+                        .map((po) => (
+                          <tr key={po._id}>
+                            <td>
+                              <span style={{fontWeight: 600, color: '#64748b'}}>
+                                {po.poNumber || `PO-${po._id.slice(-6).toUpperCase()}`}
+                              </span>
+                            </td>
+                            <td>{po.productName}</td>
+                            <td>
+                              <span style={{color: '#059669', fontWeight: 600}}>
+                                +{po.suggestedOrderQty} units
+                              </span>
+                            </td>
+                            <td>Rs {(po.estimatedCost || 0).toLocaleString()}</td>
+                            <td>{new Date(po.receivedAt || po.updatedAt).toLocaleDateString()}</td>
+                            <td>
+                              <span style={{
+                                background: '#dcfce7',
+                                color: '#166534',
+                                padding: '4px 12px',
+                                borderRadius: '12px',
+                                fontSize: '12px',
+                                fontWeight: 600
+                              }}>
+                                ✅ Completed
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -2633,12 +3175,23 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
       if (!res.ok) throw new Error("Failed to create purchase request");
       
       const data = await res.json();
+      
+      // Check if purchase order already existed
+      if (data.alreadyExists) {
+        alert(`ℹ️ A purchase order for ${suggestion.productName} already exists in Pending Deliveries!`);
+        // Still refresh to update the UI
+        fetchAIPredictions();
+        fetchPurchaseOrders();
+        return;
+      }
+      
+      // Add new PO to the list
       setPurchaseOrders([data.po, ...purchaseOrders]);
       
-      // Refresh AI predictions to remove this product from suggestions
+      // Refresh AI predictions to update the UI
       fetchAIPredictions();
       
-      alert(`✅ Purchase request created for ${suggestion.productName}! It's now in your 'Pending Deliveries' list.`);
+      alert(`✅ Purchase request created for ${suggestion.productName}! Check 'Pending Deliveries' below.`);
     } catch (error) {
       console.error("PO Creation error:", error);
       alert(`❌ Error creating request: ${error.message}`);
@@ -2684,6 +3237,9 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
       // Refresh AI predictions to update suggestions
       fetchAIPredictions();
       
+      // Update low stock count
+      fetchLowStockItems();
+      
       // Show success message
       alert(`🎉 Successfully restocked ${data.po.productName}! Stock has been updated to ${data.product.quantity} units.`);
       
@@ -2693,170 +3249,6 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
     }
   };
 
-  const ProcurementView = ({ purchaseOrders, createPurchaseRequest, fulfillOrder }) => {
-    const [reorderData, setReorderData] = useState(null);
-    const [loading, setLoading] = useState(false);
-
-    const pendingPOs = Array.isArray(purchaseOrders) ? purchaseOrders.filter(po => po.status === 'Pending') : [];
-    const completedPOs = Array.isArray(purchaseOrders) ? purchaseOrders.filter(po => po.status === 'Received') : [];
-
-    useEffect(() => {
-      const fetchReorder = async () => {
-        setLoading(true);
-        try {
-          const token = localStorage.getItem('authToken');
-          const res = await fetch('http://localhost:3001/api/ai/reorder-suggestions', {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          const result = await res.json();
-          setReorderData(result);
-        } catch (err) {
-          console.error(err);
-        }
-        setLoading(false);
-      };
-      fetchReorder();
-    }, [purchaseOrders.length]); // Refetch when purchase orders change
-
-    return (
-      <div className="section-content">
-        <div className="section-header-page">
-          <h2>📦 Reorder Suggestions & Restocking</h2>
-          <p className="section-subtitle">Turn AI reorder suggestions into active inventory restocks</p>
-        </div>
-
-        {/* PENDING DELIVERIES SECTION */}
-        <div style={{ marginBottom: '30px' }}>
-          <h3 style={{ marginBottom: '15px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            🚚 Pending Deliveries ({pendingPOs.length})
-          </h3>
-          <div className="products-table-container">
-            <table className="products-table">
-              <thead>
-                <tr>
-                  <th>PO #</th>
-                  <th>Product</th>
-                  <th>Expected Qty</th>
-                  <th>Requested Date</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pendingPOs.length === 0 ? (
-                  <tr>
-                    <td colSpan="5" style={{ textAlign: 'center', padding: '30px', color: '#64748b' }}>
-                      No pending deliveries. Use the suggestions below to order more stock.
-                    </td>
-                  </tr>
-                ) : (
-                  pendingPOs.map((po) => (
-                    <tr key={po._id}>
-                      <td><strong>{po.poNumber}</strong></td>
-                      <td>{po.productName}</td>
-                      <td><span style={{ color: '#2563eb', fontWeight: 'bold' }}>+{po.suggestedOrderQty} units</span></td>
-                      <td>{new Date(po.createdAt || po.orderDate).toLocaleDateString()}</td>
-                      <td>
-                        <button 
-                          className="submit-btn" 
-                          style={{ padding: '6px 12px', fontSize: '12px', width: 'auto' }}
-                          onClick={() => fulfillOrder(po._id)}
-                        >
-                          ✅ Confirm Receipt
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* AI SUGGESTIONS SECTION */}
-        <div style={{ marginBottom: '30px', backgroundColor: '#f8fafc', padding: '20px', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-          <h3 style={{ marginBottom: '15px', color: '#1e293b' }}>🤖 Smart Reorder Suggestions</h3>
-          {loading ? (
-             <div className="loading-state"><div className="spinner"></div><p>Calculating reorder points...</p></div>
-          ) : (
-            <div className="products-table-container">
-              <table className="products-table">
-                <thead>
-                  <tr>
-                    <th>Product</th>
-                    <th>Stock / Reorder Pt</th>
-                    <th>Suggested Qty</th>
-                    <th>Est. Cost</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(reorderData?.suggestions || []).map((item, idx) => (
-                    <tr key={idx}>
-                      <td><strong>{item.productName}</strong><br/><small>{item.category}</small></td>
-                      <td>{item.currentStock} / {item.reorderPoint}</td>
-                      <td><span style={{ color: '#059669', fontWeight: 'bold' }}>+{item.suggestedOrderQty}</span></td>
-                      <td>₨ {(item.estimatedCost || 0).toLocaleString()}</td>
-                      <td>
-                        <button 
-                          onClick={() => createPurchaseRequest(item)}
-                          style={{
-                            backgroundColor: '#2563eb',
-                            color: 'white',
-                            border: 'none',
-                            padding: '8px 16px',
-                            borderRadius: '6px',
-                            fontSize: '12px',
-                            cursor: 'pointer',
-                            fontWeight: '600'
-                          }}
-                        >
-                          🛒 Create Purchase Request
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {(!reorderData?.suggestions || reorderData.suggestions.length === 0) && (
-                    <tr><td colSpan="5" style={{ textAlign: 'center', padding: '20px' }}>Your inventory is currently optimal!</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        {/* RESTOCK HISTORY LOG */}
-        <div>
-          <h3 style={{ marginBottom: '15px', color: '#64748b' }}>📜 Restock History (Last 5)</h3>
-          <div className="products-table-container">
-            <table className="products-table" style={{ opacity: 0.8 }}>
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th>Qty Received</th>
-                  <th>Received At</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {completedPOs.length === 0 ? (
-                  <tr><td colSpan="4" style={{ textAlign: 'center', padding: '15px' }}>No completed restocks yet.</td></tr>
-                ) : (
-                  completedPOs.slice(0, 5).map(po => (
-                    <tr key={po._id}>
-                      <td>{po.productName}</td>
-                      <td><strong>+{po.suggestedOrderQty}</strong></td>
-                      <td>{new Date(po.receivedAt).toLocaleString()}</td>
-                      <td><span className="status-badge" style={{ backgroundColor: '#dcfce7', color: '#166534' }}>Completed</span></td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    );
-  };
   
   return (
     <div className="dashboard-container">
@@ -2926,14 +3318,6 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
               <span className="nav-text">Customers</span>
             </div>
           )}
-          <div className={`nav-item ${activeSection === 'procurement' ? 'active' : ''}`} onClick={() => setActiveSection('procurement')}>
-            <svg className="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
-              <circle cx="9" cy="21" r="1"/>
-              <circle cx="20" cy="21" r="1"/>
-            </svg>
-            <span className="nav-text">Reorder Suggestions</span>
-          </div>
           <div className={`nav-item ${activeSection === 'ai-analytics' ? 'active' : ''}`} onClick={() => setActiveSection('ai-analytics')}>
             <svg className="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>

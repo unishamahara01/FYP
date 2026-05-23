@@ -39,8 +39,13 @@ export default function ForgotPasswordPage({ onBackToLogin, onSwitchToReset }) {
         throw new Error(data.message || "Failed to send reset code");
       }
 
-      setSuccess("Password reset code sent to your email! Check your inbox.");
-      setEmail("");
+      setSuccess("Password reset code sent to your email! Redirecting...");
+      
+      // Auto-redirect to reset password page after 2 seconds
+      setTimeout(() => {
+        onSwitchToReset();
+      }, 2000);
+      
     } catch (err) {
       setError(err.message || "Failed to send reset code. Please try again.");
     } finally {
@@ -84,6 +89,9 @@ export default function ForgotPasswordPage({ onBackToLogin, onSwitchToReset }) {
 
             {success && (
               <div className="success-message">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{display: 'inline-block', marginRight: '8px', verticalAlign: 'middle'}}>
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
                 {success}
               </div>
             )}

@@ -196,6 +196,10 @@ class ExpiryPredictor:
     
     def predict(self, products, sales_data):
         """Predict expiry risk for products"""
+        # Handle empty products list
+        if len(products) == 0:
+            return []
+        
         # Load model if not trained
         if not self.is_trained:
             if os.path.exists('models/expiry_ridge_model.pkl'):
@@ -207,6 +211,10 @@ class ExpiryPredictor:
         
         # Extract features
         X, _, product_ids = self.extract_features(products, sales_data)
+        
+        # Handle case where no features could be extracted
+        if len(X) == 0:
+            return []
         
         # Scale features
         X_scaled = self.scaler.transform(X)

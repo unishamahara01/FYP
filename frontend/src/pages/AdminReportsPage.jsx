@@ -148,18 +148,12 @@ function SystemOverview({ data }) {
       <div className="admin-executive-summary">
         <div className="admin-summary-card revenue">
           <div className="admin-summary-icon">
-            ₹
+            Rs
           </div>
           <div className="admin-summary-content">
             <div className="admin-summary-label">Total Revenue</div>
             <div className="admin-summary-value">Rs {sales?.totalSales?.toLocaleString() || 0}</div>
-            <div className="admin-summary-trend positive">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>
-                <polyline points="17 6 23 6 23 12"/>
-              </svg>
-              System-wide sales
-            </div>
+            <div className="admin-summary-trend positive">System-wide sales</div>
           </div>
         </div>
 

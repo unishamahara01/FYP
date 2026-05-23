@@ -132,16 +132,34 @@ ${aiAvailable ? '✅ AI Assistant is online' : '⚠️ AI Assistant is offline (
         return "No products found in inventory.";
       }
 
-      const inStock = products.filter(p => p.quantity > 0).length;
-      const lowStock = products.filter(p => p.quantity > 0 && p.quantity <= (p.reorderLevel || 50)).length;
-      const outOfStock = products.filter(p => p.quantity === 0).length;
+      const today = new Date();
+      
+      // Separate expired and active batches
+      const expiredBatches = products.filter(p => {
+        if (!p.expiryDate) return false;
+        const expiryDate = new Date(p.expiryDate);
+        return expiryDate < today || p.status === 'Expired';
+      });
+      
+      const activeBatches = products.filter(p => {
+        if (!p.expiryDate) return true;
+        const expiryDate = new Date(p.expiryDate);
+        return expiryDate >= today && p.status !== 'Expired';
+      });
+      
+      // Count active batches only
+      const inStock = activeBatches.filter(p => p.quantity > p.reorderLevel).length;
+      const lowStock = activeBatches.filter(p => p.quantity > 0 && p.quantity <= p.reorderLevel).length;
+      const outOfStock = activeBatches.filter(p => p.quantity === 0).length;
+      const totalActive = inStock + lowStock + outOfStock;
 
       return `**Inventory Summary**
 
-Total Products: ${products.length}
+Total Products: ${totalActive}
 In Stock: ${inStock}
 Low Stock: ${lowStock}
 Out of Stock: ${outOfStock}
+Expired: ${expiredBatches.length}
 
 Would you like to see low stock items or expiring items?`;
     } catch (error) {
@@ -157,8 +175,17 @@ Would you like to see low stock items or expiring items?`;
       let products = await res.json();
       if (!Array.isArray(products)) products = [];
 
-      // Get all items that need attention (quantity <= reorderLevel)
-      const needsAttention = products.filter(p => p.quantity <= (p.reorderLevel || 50));
+      const today = new Date();
+      
+      // Filter out expired batches first
+      const activeBatches = products.filter(p => {
+        if (!p.expiryDate) return true;
+        const expiryDate = new Date(p.expiryDate);
+        return expiryDate >= today && p.status !== 'Expired';
+      });
+
+      // Get all active batches that need attention (quantity <= reorderLevel)
+      const needsAttention = activeBatches.filter(p => p.quantity <= p.reorderLevel);
       const outOfStock = needsAttention.filter(p => p.quantity === 0);
       const lowStock = needsAttention.filter(p => p.quantity > 0);
 
@@ -166,28 +193,24 @@ Would you like to see low stock items or expiring items?`;
         return "Great news! No items are currently low on stock.";
       }
 
-      let response = `**Stock Alert** (${needsAttention.length} items need attention)\n\n`;
+      let response = `**Stock Alert** (${needsAttention.length} batches need attention)\n\n`;
       
       if (outOfStock.length > 0) {
-        response += `🔴 **Out of Stock** (${outOfStock.length} items)\n`;
-        outOfStock.slice(0, 3).forEach(item => {
-          response += `• ${item.name} - URGENT REORDER\n`;
+        response += `🔴 **Out of Stock** (${outOfStock.length} batches)\n`;
+        outOfStock.forEach(item => {
+          response += `• ${item.name} (Batch: ${item.batchNumber}) - URGENT REORDER\n`;
         });
         response += '\n';
       }
       
       if (lowStock.length > 0) {
-        response += `🟡 **Low Stock** (${lowStock.length} items)\n`;
-        lowStock.slice(0, 3).forEach(item => {
-          response += `• ${item.name} - Stock: ${item.quantity}\n`;
+        response += `🟡 **Low Stock** (${lowStock.length} batches)\n`;
+        lowStock.forEach(item => {
+          response += `• ${item.name} (Batch: ${item.batchNumber}) - Stock: ${item.quantity}\n`;
         });
       }
 
-      if (needsAttention.length > 6) {
-        response += `\n...and ${needsAttention.length - 6} more items.\n`;
-      }
-
-      response += "\nTip: Type 'reorder suggestions' to see what to order!";
+      response += "\n⚠️ Tip: Type 'reorder suggestions' to see what to order!";
       return response;
     } catch (error) {
       return "Unable to fetch low stock items. Please try again.";
@@ -206,24 +229,26 @@ Would you like to see low stock items or expiring items?`;
       const ninetyDaysLater = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
 
       const expiring = products.filter(p => {
+        if (!p.expiryDate) return false;
         const expiryDate = new Date(p.expiryDate);
         return expiryDate <= ninetyDaysLater && expiryDate > now;
-      });
+      }).sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
 
       if (expiring.length === 0) {
         return "No items expiring in the next 90 days!";
       }
 
       let response = `**Expiring Soon** (${expiring.length} items)\n\n`;
-      expiring.slice(0, 5).forEach(item => {
+      
+      // Show ALL expiring items, not just 5
+      expiring.forEach((item, index) => {
         const expiryDate = new Date(item.expiryDate);
         const daysLeft = Math.ceil((expiryDate - now) / (1000 * 60 * 60 * 24));
-        response += `• ${item.name}\n  Expires: ${expiryDate.toLocaleDateString()} (${daysLeft} days)\n  Stock: ${item.quantity}\n\n`;
+        response += `${index + 1}. **${item.name}**\n`;
+        response += `   Batch: ${item.batchNumber}\n`;
+        response += `   Expires: ${expiryDate.toLocaleDateString()} (${daysLeft} days)\n`;
+        response += `   Stock: ${item.quantity} units\n\n`;
       });
-
-      if (expiring.length > 5) {
-        response += `...and ${expiring.length - 5} more items.\n\n`;
-      }
 
       response += "Consider promoting these items or offering discounts!";
       return response;

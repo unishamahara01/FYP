@@ -17,6 +17,10 @@ export default function CustomersPage() {
     chronicConditions: ''
   });
 
+  // Order History Modal State
+  const [showOrdersModal, setShowOrdersModal] = useState(false);
+  const [selectedCustomerOrders, setSelectedCustomerOrders] = useState(null);
+
   useEffect(() => {
     fetchCustomers();
   }, []);
@@ -34,6 +38,37 @@ export default function CustomersPage() {
     } catch (error) {
       console.error('Error fetching customers:', error);
       setLoading(false);
+    }
+  };
+
+  const handleViewOrders = async (customer) => {
+    try {
+      const token = localStorage.getItem('authToken') || localStorage.getItem('token');
+      if (!token) {
+        alert('Authentication token not found. Please login again.');
+        return;
+      }
+      
+      const res = await fetch(`http://localhost:3001/api/customers/${customer._id}/orders`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      if (!res.ok) {
+        const errorData = await res.json();
+        console.error('Error response:', errorData);
+        alert(`Failed to fetch customer orders: ${errorData.message || 'Unknown error'}`);
+        return;
+      }
+      
+      const data = await res.json();
+      console.log('Customer orders data:', data);
+      
+      // Backend returns { customer, orders, totalOrders, totalSpent }
+      setSelectedCustomerOrders(data);
+      setShowOrdersModal(true);
+    } catch (error) {
+      console.error('Error fetching customer orders:', error);
+      alert(`Failed to fetch customer orders: ${error.message}`);
     }
   };
 
@@ -156,8 +191,10 @@ export default function CustomersPage() {
                 <th>Phone</th>
                 <th>Email</th>
                 <th>City</th>
-                <th>Gender</th>
-                <th>Allergies</th>
+                <th>Loyalty Points</th>
+                <th>Tier</th>
+                <th>Total Purchases</th>
+                <th>📦 Orders</th>
                 <th>Last Visit</th>
                 <th>Actions</th>
               </tr>
@@ -165,7 +202,7 @@ export default function CustomersPage() {
             <tbody>
               {customers.length === 0 ? (
                 <tr>
-                  <td colSpan="8" style={{textAlign: 'center', padding: '40px'}}>
+                  <td colSpan="10" style={{textAlign: 'center', padding: '40px'}}>
                     No customers found. Click "Add Customer" to get started.
                   </td>
                 </tr>
@@ -176,8 +213,47 @@ export default function CustomersPage() {
                     <td>{customer.phone}</td>
                     <td>{customer.email || 'N/A'}</td>
                     <td>{customer.address?.city || 'N/A'}</td>
-                    <td>{customer.gender}</td>
-                    <td>{customer.allergies || 'None'}</td>
+                    <td>
+                      <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+                        <span style={{fontSize: '18px', fontWeight: 'bold', color: '#667eea'}}>
+                          {customer.loyaltyPoints || 0}
+                        </span>
+                        <span style={{fontSize: '12px', color: '#64748b'}}>
+                          (Rs {Math.floor((customer.loyaltyPoints || 0) / 100) * 10})
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <span className={`tier-badge ${(customer.loyaltyTier || 'Bronze').toLowerCase()}`}>
+                        {customer.loyaltyTier === 'Platinum' && '💎'}
+                        {customer.loyaltyTier === 'Gold' && '🥇'}
+                        {customer.loyaltyTier === 'Silver' && '🥈'}
+                        {customer.loyaltyTier === 'Bronze' && '🥉'}
+                        {customer.loyaltyTier || 'Bronze'}
+                      </span>
+                    </td>
+                    <td>Rs {(customer.totalPurchases || 0).toLocaleString()}</td>
+                    <td>
+                      <button 
+                        className="view-orders-btn"
+                        onClick={() => handleViewOrders(customer)}
+                        style={{
+                          padding: '6px 12px',
+                          backgroundColor: '#667eea',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          fontSize: '13px',
+                          fontWeight: '500',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
+                        }}
+                      >
+                        📋 Orders ({customer.orderCount || 0})
+                      </button>
+                    </td>
                     <td>{customer.lastVisit ? new Date(customer.lastVisit).toLocaleDateString() : 'Never'}</td>
                     <td>
                       <div className="action-buttons">
@@ -341,6 +417,157 @@ export default function CustomersPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Order History Modal */}
+      {showOrdersModal && selectedCustomerOrders && (
+        <div className="modal-overlay" onClick={() => setShowOrdersModal(false)}>
+          <div className="modal-content large-modal" onClick={(e) => e.stopPropagation()} style={{maxWidth: '900px'}}>
+            <div className="modal-header">
+              <div>
+                <h3>📦 Order History - {selectedCustomerOrders.customer.fullName}</h3>
+                <p style={{fontSize: '14px', color: '#64748b', margin: '5px 0 0 0'}}>
+                  {selectedCustomerOrders.customer.loyaltyTier || 'Silver'} Member • {selectedCustomerOrders.customer.loyaltyPoints || 0} Points
+                </p>
+              </div>
+              <button className="close-btn" onClick={() => setShowOrdersModal(false)}>×</button>
+            </div>
+            
+            <div style={{padding: '20px'}}>
+              {/* Summary Stats */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)',
+                gap: '15px',
+                marginBottom: '25px'
+              }}>
+                <div style={{
+                  backgroundColor: '#f8fafc',
+                  padding: '15px',
+                  borderRadius: '8px',
+                  textAlign: 'center'
+                }}>
+                  <div style={{fontSize: '24px', fontWeight: 'bold', color: '#667eea'}}>
+                    {selectedCustomerOrders.orders.length}
+                  </div>
+                  <div style={{fontSize: '13px', color: '#64748b'}}>Total Orders</div>
+                </div>
+                <div style={{
+                  backgroundColor: '#f8fafc',
+                  padding: '15px',
+                  borderRadius: '8px',
+                  textAlign: 'center'
+                }}>
+                  <div style={{fontSize: '24px', fontWeight: 'bold', color: '#10b981'}}>
+                    Rs {selectedCustomerOrders.totalSpent.toLocaleString()}
+                  </div>
+                  <div style={{fontSize: '13px', color: '#64748b'}}>Total Spent</div>
+                </div>
+                <div style={{
+                  backgroundColor: '#f8fafc',
+                  padding: '15px',
+                  borderRadius: '8px',
+                  textAlign: 'center'
+                }}>
+                  <div style={{fontSize: '24px', fontWeight: 'bold', color: '#f59e0b'}}>
+                    Rs {selectedCustomerOrders.orders.length > 0 
+                      ? Math.round(selectedCustomerOrders.totalSpent / selectedCustomerOrders.orders.length).toLocaleString()
+                      : 0}
+                  </div>
+                  <div style={{fontSize: '13px', color: '#64748b'}}>Avg Order Value</div>
+                </div>
+              </div>
+
+              {/* Orders List */}
+              {selectedCustomerOrders.orders.length === 0 ? (
+                <div style={{textAlign: 'center', padding: '40px', color: '#64748b'}}>
+                  No orders found for this customer
+                </div>
+              ) : (
+                <div style={{maxHeight: '400px', overflowY: 'auto'}}>
+                  {selectedCustomerOrders.orders.map((order, index) => (
+                    <div key={order._id} style={{
+                      backgroundColor: '#ffffff',
+                      border: '2px solid #e2e8f0',
+                      borderRadius: '8px',
+                      padding: '15px',
+                      marginBottom: '15px'
+                    }}>
+                      <div style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        marginBottom: '12px'
+                      }}>
+                        <div>
+                          <strong style={{fontSize: '16px', color: '#1e293b'}}>
+                            Order #{order.orderNumber}
+                          </strong>
+                          <div style={{fontSize: '13px', color: '#64748b', marginTop: '4px'}}>
+                            {new Date(order.createdAt).toLocaleDateString('en-US', {
+                              year: 'numeric',
+                              month: 'long',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </div>
+                        </div>
+                        <div style={{textAlign: 'right'}}>
+                          <div style={{fontSize: '20px', fontWeight: 'bold', color: '#10b981'}}>
+                            Rs {order.totalAmount.toLocaleString()}
+                          </div>
+                          <span className={`status-badge ${order.status.toLowerCase()}`}>
+                            {order.status}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Order Items */}
+                      <div style={{
+                        backgroundColor: '#f8fafc',
+                        borderRadius: '6px',
+                        padding: '12px',
+                        marginBottom: '10px'
+                      }}>
+                        <div style={{fontSize: '13px', fontWeight: '600', color: '#475569', marginBottom: '8px'}}>
+                          Items ({order.items.length}):
+                        </div>
+                        {order.items.map((item, idx) => (
+                          <div key={idx} style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            fontSize: '13px',
+                            color: '#64748b',
+                            marginBottom: '4px'
+                          }}>
+                            <span>• {item.productName || 'Unknown Product'}</span>
+                            <span>{item.quantity}x @ Rs {item.price.toLocaleString()} = Rs {(item.quantity * item.price).toLocaleString()}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Order Details */}
+                      <div style={{
+                        display: 'flex',
+                        gap: '20px',
+                        fontSize: '13px',
+                        color: '#64748b'
+                      }}>
+                        <div>
+                          <strong>Payment:</strong> {order.paymentMethod}
+                        </div>
+                        <div>
+                          <strong>Staff:</strong> {order.staffName || 'N/A'}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
