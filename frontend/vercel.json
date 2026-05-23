@@ -1,8 +1,7 @@
 {
   "build": {
     "env": {
-      "REACT_APP_API_URL": "https://YOUR_RENDER_BACKEND_URL/api",
-      "REACT_APP_AI_URL": "https://YOUR_AI_BACKEND_URL"
+      "REACT_APP_API_URL": "https://meditrust-backend-48uj.onrender.com/api"
     }
   }
 }
