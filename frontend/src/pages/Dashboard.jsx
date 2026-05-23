@@ -13,6 +13,7 @@ import SearchableSelect from "../components/SearchableSelect";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { QRCodeSVG } from 'qrcode.react';
 import CryptoJS from 'crypto-js';
+import { API_BASE_URL, AI_BASE_URL } from '../services/api';
 
 export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
   const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
@@ -240,7 +241,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
       
       // 1. Fetch stats (with cache-busting)
       try {
-        const statsRes = await fetch(`http://localhost:3001/api/dashboard/stats?t=${cacheBuster}`, {
+        const statsRes = await fetch(`${API_BASE_URL}/dashboard/stats?t=${cacheBuster}`, {
           headers: { 
             Authorization: `Bearer ${token}`,
             'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -272,7 +273,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
 
       // 2. Fetch sales forecast (with cache-busting)
       try {
-        const salesRes = await fetch(`http://localhost:3001/api/sales/forecast?t=${cacheBuster}`, {
+        const salesRes = await fetch(`${API_BASE_URL}/sales/forecast?t=${cacheBuster}`, {
           headers: { 
             Authorization: `Bearer ${token}`,
             'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -308,7 +309,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
       
       // 5. Fetch Top Products
       try {
-        const topProductsRes = await fetch('http://localhost:3001/api/dashboard/top-products', {
+        const topProductsRes = await fetch(`${API_BASE_URL}/dashboard/top-products`, {
           headers: { Authorization: `Bearer ${token}` }
         });
         if (topProductsRes.ok) {
@@ -325,7 +326,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
       
       // 6. Fetch Recent Activity
       try {
-        const activityRes = await fetch('http://localhost:3001/api/dashboard/recent-activity', {
+        const activityRes = await fetch(`${API_BASE_URL}/dashboard/recent-activity`, {
           headers: { Authorization: `Bearer ${token}` }
         });
         if (activityRes.ok) {
@@ -359,7 +360,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
       console.log('🔄 Fetching AI predictions...');
       
       // Check if ML backend is available
-      const healthCheck = await fetch('http://localhost:5001/health');
+      const healthCheck = await fetch(`${AI_BASE_URL}/health`);
       if (!healthCheck.ok) {
         console.log('❌ ML backend health check failed');
         setAiPredictions(null);
@@ -376,7 +377,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
       }
 
       // Fetch expiry predictions from ML backend
-      const res = await fetch('http://localhost:5001/predict');
+      const res = await fetch(`${AI_BASE_URL}/predict`);
       
       // If predictions fail (model not trained), auto-train first
       if (!res.ok) {
@@ -399,7 +400,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
       
       // Fetch reorder suggestions from Node backend
       const token = localStorage.getItem('authToken');
-      const reorderRes = await fetch('http://localhost:3001/api/ai/reorder-suggestions', {
+      const reorderRes = await fetch(`${API_BASE_URL}/ai/reorder-suggestions`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       
@@ -420,7 +421,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
       });
       
       // Fetch demand predictions
-      const demandRes = await fetch('http://localhost:5001/predict/demand');
+      const demandRes = await fetch(`${AI_BASE_URL}/predict/demand`);
       if (demandRes.ok) {
         const demandData = await demandRes.json();
         if (demandData.success && demandData.predictions) {
@@ -436,7 +437,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
 
   const trainAIModel = async (silent = false) => {
     try {
-      const response = await fetch('http://localhost:5001/train', {
+      const response = await fetch(`${AI_BASE_URL}/train`, {
         method: 'POST'
       });
       
@@ -462,7 +463,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
   const handleApplyPromotion = async (productId, discountPercentage) => {
     try {
       const token = localStorage.getItem('authToken');
-      const response = await fetch('http://localhost:3001/api/inventory/apply-promotion', {
+      const response = await fetch(`${API_BASE_URL}/inventory/apply-promotion`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -495,7 +496,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
   const handleRemovePromotion = async (productId) => {
     try {
       const token = localStorage.getItem('authToken');
-      const response = await fetch('http://localhost:3001/api/inventory/apply-promotion', {
+      const response = await fetch(`${API_BASE_URL}/inventory/apply-promotion`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -538,7 +539,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
 
     try {
       const token = localStorage.getItem('authToken');
-      const response = await fetch(`http://localhost:3001/api/products/${productId}`, {
+      const response = await fetch(`${API_BASE_URL}/products/${productId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -568,7 +569,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
   const fetchLowStockItems = async () => {
     try {
       const token = localStorage.getItem('authToken');
-      const res = await fetch('http://localhost:3001/api/inventory/low-stock', {
+      const res = await fetch(`${API_BASE_URL}/inventory/low-stock`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -584,7 +585,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
     try {
       setProductsLoading(true);
       const token = localStorage.getItem('authToken');
-      const res = await fetch('http://localhost:3001/api/products', {
+      const res = await fetch(`${API_BASE_URL}/products`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -634,7 +635,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
     try {
       setCustomersLoading(true);
       const token = localStorage.getItem('authToken');
-      const res = await fetch('http://localhost:3001/api/customers', {
+      const res = await fetch(`${API_BASE_URL}/customers`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -651,7 +652,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
       const token = localStorage.getItem('authToken');
       if (!token) return;
       
-      const res = await fetch('http://localhost:3001/api/purchase-orders', {
+      const res = await fetch(`${API_BASE_URL}/purchase-orders`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -689,7 +690,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
         dataToSend = qrData.id || JSON.stringify(qrData);
       }
       
-      const res = await fetch('http://localhost:3001/api/products/qr-lookup', {
+      const res = await fetch(`${API_BASE_URL}/products/qr-lookup`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -744,7 +745,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
         return;
       }
       
-      const res = await fetch('http://localhost:3001/api/products/qr-add', {
+      const res = await fetch(`${API_BASE_URL}/products/qr-add`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -883,7 +884,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
     
     try {
       const token = localStorage.getItem('authToken');
-      const res = await fetch('http://localhost:3001/api/products', {
+      const res = await fetch(`${API_BASE_URL}/products`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -924,7 +925,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
   const fetchCustomersForOrder = async () => {
     try {
       const token = localStorage.getItem('authToken');
-      const res = await fetch('http://localhost:3001/api/customers', {
+      const res = await fetch(`${API_BASE_URL}/customers`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) {
@@ -941,7 +942,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
       console.log("📋 Fetching orders...");
       setOrdersLoading(true);
       const token = localStorage.getItem('authToken');
-      const res = await fetch('http://localhost:3001/api/orders', {
+      const res = await fetch(`${API_BASE_URL}/orders`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       
@@ -981,7 +982,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
       
       console.log('📦 Creating order:', orderData);
       
-      const res = await fetch('http://localhost:3001/api/orders', {
+      const res = await fetch(`${API_BASE_URL}/orders`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1981,7 +1982,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
                         
                         try {
                             console.log("🚀 Initiating eSewa payment...");
-                            const res = await fetch('http://localhost:3001/api/payments/initiate-esewa', {
+                            const res = await fetch(`${API_BASE_URL}/payments/initiate-esewa`, {
                                 method: 'POST',
                                 headers: { 
                                     'Content-Type': 'application/json', 
@@ -3158,7 +3159,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
   const createPurchaseRequest = async (suggestion) => {
     try {
       const token = localStorage.getItem('authToken');
-      const res = await fetch('http://localhost:3001/api/purchase-orders', {
+      const res = await fetch(`${API_BASE_URL}/purchase-orders`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -3204,7 +3205,7 @@ export default function Dashboard({ onLogout, onAccountSettings, userRole }) {
     try {
       console.log(`🔄 Attempting to fulfill PO: ${poId}`);
       
-      const res = await fetch(`http://localhost:3001/api/purchase-orders/${poId}/fulfill`, {
+      const res = await fetch(`${API_BASE_URL}/purchase-orders/${poId}/fulfill`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

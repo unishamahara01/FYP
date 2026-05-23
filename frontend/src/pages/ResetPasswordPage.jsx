@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import "./ResetPasswordPage.css";
+import { API_BASE_URL } from "../services/api";
 
 export default function ResetPasswordPage({ onBackToLogin, onResetSuccess }) {
   const [formData, setFormData] = useState({
@@ -43,7 +44,7 @@ export default function ResetPasswordPage({ onBackToLogin, onResetSuccess }) {
     setIsLoading(true);
 
     try {
-      const response = await fetch("http://localhost:3001/api/auth/reset-password", {
+      const response = await fetch(`${API_BASE_URL}/auth/reset-password`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './SuppliersPage.css';
+import { API_BASE_URL } from '../services/api';
 
 export default function SuppliersPage() {
   const [suppliers, setSuppliers] = useState([]);
@@ -25,7 +26,7 @@ export default function SuppliersPage() {
     try {
       setLoading(true);
       const token = localStorage.getItem('authToken');
-      const res = await fetch('http://localhost:3001/api/suppliers', {
+      const res = await fetch(`${API_BASE_URL}/suppliers`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -48,8 +49,8 @@ export default function SuppliersPage() {
     try {
       const token = localStorage.getItem('authToken');
       const url = editingSupplier 
-        ? `http://localhost:3001/api/suppliers/${editingSupplier._id}`
-        : 'http://localhost:3001/api/suppliers';
+        ? `${API_BASE_URL}/suppliers/${editingSupplier._id}`
+        : `${API_BASE_URL}/suppliers`;
       
       const res = await fetch(url, {
         method: editingSupplier ? 'PUT' : 'POST',
@@ -96,7 +97,7 @@ export default function SuppliersPage() {
 
     try {
       const token = localStorage.getItem('authToken');
-      const res = await fetch(`http://localhost:3001/api/suppliers/${id}`, {
+      const res = await fetch(`${API_BASE_URL}/suppliers/${id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
       });

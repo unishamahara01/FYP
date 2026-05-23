@@ -1,6 +1,6 @@
 // API Configuration
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
-const AI_BASE_URL = process.env.REACT_APP_AI_URL || 'http://localhost:5001';
+export const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
+export const AI_BASE_URL = process.env.REACT_APP_AI_URL || 'http://localhost:5001';
 
 // Get auth token
 const getAuthToken = () => {

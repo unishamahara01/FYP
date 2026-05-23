@@ -4,6 +4,7 @@ import { renderModals } from './AdminDashboardModals';
 import AdminReportsPage from './AdminReportsPage';
 import SuppliersPage from './SuppliersPage';
 import CustomersPage from './CustomersPage';
+import { API_BASE_URL, AI_BASE_URL } from '../services/api';
 
 const AdminDashboard = ({ onLogout, onAccountSettings }) => {
   const [activeTab, setActiveTab] = React.useState('users');
@@ -56,12 +57,12 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
 
       // Fetch all counts
       const [usersRes, deptsRes, pharmsRes, suppliersRes, customersRes, productsRes] = await Promise.all([
-        fetch('http://localhost:3001/api/admin/users', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('http://localhost:3001/api/admin/departments', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('http://localhost:3001/api/admin/pharmacies', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('http://localhost:3001/api/suppliers', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('http://localhost:3001/api/customers', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('http://localhost:3001/api/products', { headers: { 'Authorization': `Bearer ${token}` } })
+        fetch(`${API_BASE_URL}/admin/users`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/admin/departments`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/admin/pharmacies`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/suppliers`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/customers`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/products`, { headers: { 'Authorization': `Bearer ${token}` } })
       ]);
 
       const usersData = await usersRes.json();
@@ -110,11 +111,11 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
 
       // Fetch all counts in parallel
       const [usersRes, deptRes, pharmRes, suppRes, custRes] = await Promise.all([
-        fetch('http://localhost:3001/api/admin/users', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('http://localhost:3001/api/admin/departments', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('http://localhost:3001/api/admin/pharmacies', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('http://localhost:3001/api/suppliers', { headers: { 'Authorization': `Bearer ${token}` } }),
-        fetch('http://localhost:3001/api/customers', { headers: { 'Authorization': `Bearer ${token}` } })
+        fetch(`${API_BASE_URL}/admin/users`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/admin/departments`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/admin/pharmacies`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/suppliers`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API_BASE_URL}/customers`, { headers: { 'Authorization': `Bearer ${token}` } })
       ]);
 
       if (usersRes.ok) {
@@ -147,7 +148,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
       console.log('🔄 Fetching AI predictions...');
       
       // Check if ML backend is available
-      const healthCheck = await fetch('http://localhost:5001/health');
+      const healthCheck = await fetch(`${AI_BASE_URL}/health`);
       if (!healthCheck.ok) {
         console.log('❌ ML backend health check failed');
         setAiPredictions(null);
@@ -164,7 +165,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
       }
 
       // Fetch expiry predictions from ML backend
-      const res = await fetch('http://localhost:5001/predict');
+      const res = await fetch(`${AI_BASE_URL}/predict`);
       
       // If predictions fail (model not trained), auto-train first
       if (!res.ok) {
@@ -188,7 +189,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
       setAiPredictions(data || { predictions: [] });
       
       // Fetch demand predictions
-      const demandRes = await fetch('http://localhost:5001/predict/demand');
+      const demandRes = await fetch(`${AI_BASE_URL}/predict/demand`);
       if (demandRes.ok) {
         const demandData = await demandRes.json();
         if (demandData.success && demandData.predictions) {
@@ -204,7 +205,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
 
   const trainAIModel = async (silent = false) => {
     try {
-      const response = await fetch('http://localhost:5001/train', {
+      const response = await fetch(`${AI_BASE_URL}/train`, {
         method: 'POST'
       });
       
@@ -230,7 +231,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
   const handleApplyPromotion = async (productId, discountPercentage) => {
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:3001/api/inventory/apply-promotion', {
+      const response = await fetch(`${API_BASE_URL}/inventory/apply-promotion`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -262,7 +263,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
   const handleRemovePromotion = async (productId) => {
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch('http://localhost:3001/api/inventory/apply-promotion', {
+      const response = await fetch(`${API_BASE_URL}/inventory/apply-promotion`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -304,7 +305,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
 
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`http://localhost:3001/api/products/${productId}`, {
+      const response = await fetch(`${API_BASE_URL}/products/${productId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -332,7 +333,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
   const fetchPurchaseOrders = async () => {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch('http://localhost:3001/api/purchase-orders', {
+      const res = await fetch(`${API_BASE_URL}/purchase-orders`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) {
@@ -347,7 +348,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
   const createPurchaseRequest = async (suggestion) => {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch('http://localhost:3001/api/purchase-orders', {
+      const res = await fetch(`${API_BASE_URL}/purchase-orders`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -393,7 +394,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
     try {
       console.log(`🔄 Attempting to fulfill PO: ${poId}`);
       
-      const res = await fetch(`http://localhost:3001/api/purchase-orders/${poId}/fulfill`, {
+      const res = await fetch(`${API_BASE_URL}/purchase-orders/${poId}/fulfill`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -450,7 +451,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
         return;
       }
       
-      const response = await fetch(`http://localhost:3001/api/admin/${activeTab}`, {
+      const response = await fetch(`${API_BASE_URL}/admin/${activeTab}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -475,7 +476,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
         setDepartments(Array.isArray(data.departments) ? data.departments : (Array.isArray(data) ? data : []));
         // Pre-fetch users globally to populate the new Manager Dropdown dynamically!
         try {
-          const userRes = await fetch('http://localhost:3001/api/admin/users', {
+          const userRes = await fetch(`${API_BASE_URL}/admin/users`, {
             headers: { 'Authorization': `Bearer ${token}` }
           });
           if (userRes.ok) {
@@ -518,7 +519,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
     
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`http://localhost:3001/api/admin/${activeTab}`, {
+      const response = await fetch(`${API_BASE_URL}/admin/${activeTab}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -546,7 +547,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
     
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`http://localhost:3001/api/admin/${activeTab}/${editingItem._id}`, {
+      const response = await fetch(`${API_BASE_URL}/admin/${activeTab}/${editingItem._id}`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -576,7 +577,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
 
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`http://localhost:3001/api/admin/${activeTab}/${id}`, {
+      const response = await fetch(`${API_BASE_URL}/admin/${activeTab}/${id}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -1808,7 +1809,7 @@ const AdminDashboard = ({ onLogout, onAccountSettings }) => {
                 className="admin-login-btn"
                 onClick={async () => {
                   try {
-                    const response = await fetch('http://localhost:3001/api/auth/login', {
+                    const response = await fetch(`${API_BASE_URL}/auth/login`, {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({

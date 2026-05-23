@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './AdminReportsPage.css';
+import { API_BASE_URL } from '../services/api';
 
 export default function AdminReportsPage() {
   const [dateRange, setDateRange] = useState('month');
@@ -25,16 +26,16 @@ export default function AdminReportsPage() {
       
       // Fetch all report types in parallel for system-wide view
       const [salesRes, inventoryRes, expiryRes, customerRes] = await Promise.all([
-        fetch(`http://localhost:3001/api/reports/sales?${params}`, {
+        fetch(`${API_BASE_URL}/reports/sales?${params}`, {
           headers: { Authorization: `Bearer ${token}` }
         }),
-        fetch(`http://localhost:3001/api/reports/inventory`, {
+        fetch(`${API_BASE_URL}/reports/inventory`, {
           headers: { Authorization: `Bearer ${token}` }
         }),
-        fetch(`http://localhost:3001/api/reports/expiry`, {
+        fetch(`${API_BASE_URL}/reports/expiry`, {
           headers: { Authorization: `Bearer ${token}` }
         }),
-        fetch(`http://localhost:3001/api/reports/customer?${params}`, {
+        fetch(`${API_BASE_URL}/reports/customer?${params}`, {
           headers: { Authorization: `Bearer ${token}` }
         })
       ]);

@@ -22,6 +22,38 @@ const apiRoutes = require("./routes/index");
 const { sqpSanitizer } = require("./middleware/sqpSanitizer.middleware");
 
 const app = express();
+const isProduction = process.env.NODE_ENV === "production";
+const frontendUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:3000";
+const serverUrl = process.env.SERVER_URL || `http://localhost:${process.env.PORT || 3001}`;
+const aiBackendUrl = process.env.AI_BACKEND_URL || "http://localhost:5001";
+const openRouterReferer = process.env.OPENROUTER_REFERER || frontendUrl;
+const openRouterTitle = process.env.OPENROUTER_TITLE || "MediTrust";
+
+const parseCorsOrigins = (value) => {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+};
+
+const corsOrigins = new Set([
+  ...parseCorsOrigins(process.env.CORS_ORIGINS || ""),
+  frontendUrl
+]);
+
+if (!isProduction) {
+  [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://localhost:3002",
+    "http://localhost:3005",
+    "http://localhost:3006"
+  ].forEach((origin) => corsOrigins.add(origin));
+}
 
 // Connect to MongoDB
 connectDB();
@@ -31,7 +63,13 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // Middleware
 app.use(cors({
-  origin: ["http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://localhost:3005", "http://localhost:3006"],
+  origin: (origin, callback) => {
+    if (!origin || corsOrigins.has(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error("Not allowed by CORS"));
+  },
   credentials: true
 }));
 app.use(express.json());
@@ -42,11 +80,15 @@ app.get("/api/simple-test", (req, res) => {
   console.log("🧪 SIMPLE TEST ENDPOINT HIT");
   res.json({ message: "Simple test working", timestamp: new Date().toISOString() });
 });
+app.set("trust proxy", 1);
 app.use(session({
   secret: process.env.SESSION_SECRET || "your-session-secret",
   resave: false,
   saveUninitialized: false,
-  cookie: { secure: false } // Set to true in production with HTTPS
+  cookie: {
+    secure: isProduction,
+    sameSite: isProduction ? "none" : "lax"
+  }
 }));
 app.use(passport.initialize());
 app.use(passport.session());
@@ -416,7 +458,7 @@ app.get("/api/auth/google/callback",
     const token = generateToken(req.user);
     
     // Redirect to frontend with token
-    res.redirect(`http://localhost:3000/auth/success?token=${token}&user=${encodeURIComponent(JSON.stringify(req.user))}`);
+    res.redirect(`${frontendUrl}/auth/success?token=${token}&user=${encodeURIComponent(JSON.stringify(req.user))}`);
   }
 );
 
@@ -723,13 +765,13 @@ Your role is to help pharmacists and admins manage inventory, answer customer qu
 Format your responses neatly. If presenting lists, use bullet points.
 Provide helpful, concise, and professional answers.`;
 
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:3000",
-        "X-Title": "MediTrust FYP"
+          "HTTP-Referer": openRouterReferer,
+          "X-Title": openRouterTitle
       },
       body: JSON.stringify({
         model: "openrouter/auto", // Good default free/cheap model
@@ -2853,7 +2895,7 @@ app.get("/api/ai/expiry-prediction", authenticateToken, async (req, res) => {
   try {
     // Try to use ML backend first
     try {
-      const mlResponse = await fetch('http://localhost:5001/predict-expiry', {
+      const mlResponse = await fetch(`${aiBackendUrl}/predict-expiry`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ products })
@@ -3007,7 +3049,7 @@ app.get("/api/ai/demand-prediction", authenticateToken, async (req, res) => {
     
     // Try to use Python ML backend first
     try {
-      const mlResponse = await fetch('http://localhost:5001/predict-demand', {
+      const mlResponse = await fetch(`${aiBackendUrl}/predict-demand`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ products })
@@ -3091,7 +3133,7 @@ app.get("/api/ai/reorder-suggestions", authenticateToken, async (req, res) => {
     
     // Try to use Python ML backend first
     try {
-      const mlResponse = await fetch('http://localhost:5001/predict-reorder', {
+      const mlResponse = await fetch(`${aiBackendUrl}/predict-reorder`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ products })
@@ -3198,6 +3240,10 @@ const PORT = process.env.PORT || 3001;
 let aiProcess = null;
 
 function startAIBackend() {
+  if (process.env.START_AI_BACKEND !== "true") {
+    return;
+  }
+
   console.log("🤖 Starting AI Backend...");
   
   const aiPath = path.join(__dirname, "..", "ai");
@@ -3243,8 +3289,8 @@ process.on("SIGTERM", () => {
 app.listen(PORT, () => {
   console.log("=".repeat(50));
   console.log(`🚀 MediTrust Backend Server running on port ${PORT}`);
-  console.log(`   Health check: http://localhost:${PORT}`);
-  console.log(`   API Base URL: http://localhost:${PORT}/api`);
+  console.log(`   Health check: ${serverUrl}`);
+  console.log(`   API Base URL: ${serverUrl}/api`);
   console.log("=".repeat(50));
   
   // Start AI Backend

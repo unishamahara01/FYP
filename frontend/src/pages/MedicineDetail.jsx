@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { API_BASE_URL } from '../services/api';
 
 const MedicineDetail = ({ medicineId, onClose }) => {
   const [medicine, setMedicine] = useState(null);
@@ -13,7 +14,7 @@ const MedicineDetail = ({ medicineId, onClose }) => {
   const fetchMedicineDetails = async () => {
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(`http://localhost:3001/api/products/${medicineId}`, {
+      const response = await fetch(`${API_BASE_URL}/products/${medicineId}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'

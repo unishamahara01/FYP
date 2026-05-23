@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './CustomersPage.css';
+import { API_BASE_URL } from '../services/api';
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState([]);
@@ -29,7 +30,7 @@ export default function CustomersPage() {
     try {
       setLoading(true);
       const token = localStorage.getItem('authToken');
-      const res = await fetch('http://localhost:3001/api/customers', {
+      const res = await fetch(`${API_BASE_URL}/customers`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -49,7 +50,7 @@ export default function CustomersPage() {
         return;
       }
       
-      const res = await fetch(`http://localhost:3001/api/customers/${customer._id}/orders`, {
+      const res = await fetch(`${API_BASE_URL}/customers/${customer._id}/orders`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       
@@ -82,8 +83,8 @@ export default function CustomersPage() {
     try {
       const token = localStorage.getItem('authToken');
       const url = editingCustomer 
-        ? `http://localhost:3001/api/customers/${editingCustomer._id}`
-        : 'http://localhost:3001/api/customers';
+        ? `${API_BASE_URL}/customers/${editingCustomer._id}`
+        : `${API_BASE_URL}/customers`;
       
       const res = await fetch(url, {
         method: editingCustomer ? 'PUT' : 'POST',
@@ -127,7 +128,7 @@ export default function CustomersPage() {
 
     try {
       const token = localStorage.getItem('authToken');
-      const res = await fetch(`http://localhost:3001/api/customers/${id}`, {
+      const res = await fetch(`${API_BASE_URL}/customers/${id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
       });

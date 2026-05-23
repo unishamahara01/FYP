@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import "./VerifyOTPPage.css";
+import { API_BASE_URL } from "../services/api";
 
 export default function VerifyOTPPage({ email, onVerified, onBack }) {
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
@@ -72,7 +73,7 @@ export default function VerifyOTPPage({ email, onVerified, onBack }) {
     setError("");
 
     try {
-      const response = await fetch("http://localhost:3001/api/auth/verify-otp", {
+      const response = await fetch(`${API_BASE_URL}/auth/verify-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, otp: otpCode }),
@@ -107,7 +108,7 @@ export default function VerifyOTPPage({ email, onVerified, onBack }) {
     setSuccess("");
 
     try {
-      const response = await fetch("http://localhost:3001/api/auth/resend-otp", {
+      const response = await fetch(`${API_BASE_URL}/auth/resend-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),

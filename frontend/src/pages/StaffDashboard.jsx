@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import "./StaffDashboard.css";
 import UserProfileDropdown from "../components/UserProfileDropdown";
 import AIChatbot from "../components/AIChatbot";
+import { API_BASE_URL } from "../services/api";
 
 export default function StaffDashboard({ onLogout, onAccountSettings }) {
   const [activeTab, setActiveTab] = useState('overview');
@@ -39,13 +40,13 @@ export default function StaffDashboard({ onLogout, onAccountSettings }) {
       const token = localStorage.getItem('token');
       
       // Fetch today's stats
-      const salesRes = await fetch('http://localhost:3001/api/reports/sales?range=today', {
+      const salesRes = await fetch(`${API_BASE_URL}/reports/sales?range=today`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      const inventoryRes = await fetch('http://localhost:3001/api/reports/inventory', {
+      const inventoryRes = await fetch(`${API_BASE_URL}/reports/inventory`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      const expiryRes = await fetch('http://localhost:3001/api/reports/expiry', {
+      const expiryRes = await fetch(`${API_BASE_URL}/reports/expiry`, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
@@ -70,7 +71,7 @@ export default function StaffDashboard({ onLogout, onAccountSettings }) {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch('http://localhost:3001/api/products', {
+      const res = await fetch(`${API_BASE_URL}/products`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -85,7 +86,7 @@ export default function StaffDashboard({ onLogout, onAccountSettings }) {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch('http://localhost:3001/api/orders?limit=10', {
+      const res = await fetch(`${API_BASE_URL}/orders?limit=10`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -100,7 +101,7 @@ export default function StaffDashboard({ onLogout, onAccountSettings }) {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch('http://localhost:3001/api/products', {
+      const res = await fetch(`${API_BASE_URL}/products`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -116,7 +117,7 @@ export default function StaffDashboard({ onLogout, onAccountSettings }) {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch('http://localhost:3001/api/products', {
+      const res = await fetch(`${API_BASE_URL}/products`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();

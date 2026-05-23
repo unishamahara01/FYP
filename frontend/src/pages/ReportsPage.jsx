@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './ReportsPage.css';
+import { API_BASE_URL } from '../services/api';
 
 export default function ReportsPage() {
   const [reportType, setReportType] = useState('sales');
@@ -15,7 +16,7 @@ export default function ReportsPage() {
       const token = localStorage.getItem('token') || localStorage.getItem('authToken');
       
       // If custom dates are provided, use them; otherwise use the date range
-      let url = `http://localhost:3001/api/reports/${reportType}`;
+      let url = `${API_BASE_URL}/reports/${reportType}`;
       if (customStart && customEnd) {
         url += `?range=custom&start=${customStart}&end=${customEnd}`;
       } else {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './AIChatbot.css';
-import { aiAPI } from '../services/api';
+import { aiAPI, API_BASE_URL } from '../services/api';
 
 export default function AIChatbot() {
   const [isOpen, setIsOpen] = useState(false);
@@ -122,7 +122,7 @@ ${aiAvailable ? '✅ AI Assistant is online' : '⚠️ AI Assistant is offline (
 
   const getAllStock = async (token) => {
     try {
-      const res = await fetch('http://localhost:3001/api/products', {
+      const res = await fetch(`${API_BASE_URL}/products`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       let products = await res.json();
@@ -169,7 +169,7 @@ Would you like to see low stock items or expiring items?`;
 
   const getLowStockItems = async (token) => {
     try {
-      const res = await fetch('http://localhost:3001/api/products', {
+      const res = await fetch(`${API_BASE_URL}/products`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       let products = await res.json();
@@ -219,7 +219,7 @@ Would you like to see low stock items or expiring items?`;
 
   const getExpiringItems = async (token) => {
     try {
-      const res = await fetch('http://localhost:3001/api/products', {
+      const res = await fetch(`${API_BASE_URL}/products`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       let products = await res.json();
@@ -259,7 +259,7 @@ Would you like to see low stock items or expiring items?`;
 
   const checkMedicineStock = async (medicineName, token) => {
     try {
-      const res = await fetch('http://localhost:3001/api/products', {
+      const res = await fetch(`${API_BASE_URL}/products`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       let products = await res.json();
@@ -298,7 +298,7 @@ Would you like to see low stock items or expiring items?`;
 
   const getReorderSuggestions = async (token) => {
     try {
-      const res = await fetch('http://localhost:3001/api/products', {
+      const res = await fetch(`${API_BASE_URL}/products`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       let products = await res.json();
@@ -337,7 +337,7 @@ Would you like to see low stock items or expiring items?`;
 
   const getSalesInfo = async (token) => {
     try {
-      const res = await fetch('http://localhost:3001/api/dashboard/stats', {
+      const res = await fetch(`${API_BASE_URL}/dashboard/stats`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const stats = await res.json();
