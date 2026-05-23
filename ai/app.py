@@ -21,7 +21,12 @@ load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=[
+    'https://meditrust-seven.vercel.app',
+    'https://meditrust-backend-48uj.onrender.com',
+    'http://localhost:3000',
+    'http://localhost:3001'
+])
 
 # MongoDB connection
 MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/meditrust')
@@ -386,7 +391,8 @@ if __name__ == '__main__':
     print("   - Chatbot: Google Gemini API")
     print("=" * 50)
     print("🔗 MongoDB:", MONGODB_URI)
-    print("🚀 Server: http://localhost:5001")
+    port = int(os.environ.get('PORT', 5001))
+    print(f"🚀 Server: http://localhost:{port}")
     print("=" * 50)
     
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='0.0.0.0', port=port, debug=os.getenv('FLASK_DEBUG', 'False').lower() == 'true')
