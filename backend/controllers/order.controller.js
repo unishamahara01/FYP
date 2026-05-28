@@ -118,17 +118,14 @@ exports.createOrder = async (req, res) => {
           } else {
             console.log(`📧 Sending low stock emails to ${recipients.length} admin(s)...`);
             
-            // Send emails sequentially to ensure they complete
-            for (const admin of recipients) {
+            // Fire and forget emails to prevent UI from hanging
+            recipients.forEach(admin => {
               if (admin.email) {
-                try {
-                  await sendLowStockEmail(admin.email, admin.fullName, [product]);
-                  console.log(`✅ Low stock email sent successfully to ${admin.email}`);
-                } catch (err) {
-                  console.error(`❌ Failed to send email to ${admin.email}:`, err.message);
-                }
+                sendLowStockEmail(admin.email, admin.fullName, [product])
+                  .then(() => console.log(`✅ Low stock email sent successfully to ${admin.email}`))
+                  .catch(err => console.error(`❌ Failed to send email to ${admin.email}:`, err.message));
               }
-            }
+            });
           }
         } catch (emailErr) {
           console.error("❌ Error in automated low stock email setup:", emailErr.message);

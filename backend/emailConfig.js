@@ -17,8 +17,8 @@ const emailConfig = {
   // Development/Demo settings (for FYP demonstration)
   development: {
     enabled: true,  // Enable emails since they're working
-    maxRecipients: 1,
-    testEmail: 'unishamahara01@gmail.com',  // Your working email
+    maxRecipients: 20,
+    testEmail: null,  // Send to all valid admins
     allowedDomains: ['gmail.com'],
     excludePatterns: [
       /^(admin@meditrust|test|demo|sample)/i  // Exclude fake emails
