@@ -88,6 +88,14 @@ async function checkLowStock() {
 }
 
 async function sendLowStockEmail(email, name, lowStockProducts) {
+  // Verify email credentials are configured
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    console.error('❌ EMAIL_USER or EMAIL_PASS not configured in environment');
+    throw new Error('Email credentials not configured');
+  }
+
+  console.log(`📧 sendLowStockEmail called for ${email} (recipient: ${name})`);
+  
   // Separate out of stock and low stock items
   const outOfStock = lowStockProducts.filter(p => p.quantity === 0);
   const lowStock = lowStockProducts.filter(p => p.quantity > 0);
@@ -193,9 +201,17 @@ Generated on: ${new Date().toLocaleString()}
   };
   
   try {
-    await emailTransporter.sendMail(mailOptions);
+    console.log(`📤 Sending email to ${email}...`);
+    console.log(`   Subject: ${mailOptions.subject}`);
+    console.log(`   Items: ${outOfStock.length} out-of-stock, ${lowStock.length} low-stock`);
+    
+    const info = await emailTransporter.sendMail(mailOptions);
+    console.log(`✅ Email sent successfully to ${email}. Message ID: ${info.messageId}`);
+    return info;
   } catch (error) {
     console.error(`❌ Failed to send email to ${email}:`, error.message);
+    console.error(`   Error code: ${error.code}`);
+    console.error(`   Error details:`, error);
     throw error;
   }
 }

@@ -93,10 +93,11 @@ exports.createOrder = async (req, res) => {
       
       // Update product quantity
       product.quantity -= item.quantity;
+      console.log(`📦 Product ${product.name} updated: qty=${product.quantity}, reorderLevel=${product.reorderLevel}`);
       
       // AUTOMATED LOW STOCK EMAIL TRIGGER
       if (product.quantity <= product.reorderLevel && !product.lowStockAlertSent) {
-        console.log(`🚨 Triggering automated low stock email for ${product.name}`);
+        console.log(`🚨 LOW STOCK ALERT TRIGGERED for ${product.name} (qty: ${product.quantity}, reorder: ${product.reorderLevel})`);
         product.lowStockAlertSent = true;
         
         // Find Admins/Pharmacists to notify
@@ -104,17 +105,28 @@ exports.createOrder = async (req, res) => {
           const { sendLowStockEmail } = require('../lowStockNotification');
           const adminUsers = await User.find({ role: { $in: ['Admin', 'Pharmacist'] } });
           
-          // Fire emails asynchronously without blocking the order process
-          adminUsers.forEach(admin => {
-            if (admin.email) {
-              sendLowStockEmail(admin.email, admin.fullName, [product]).catch(err => {
-                console.error(`Failed to send background email to ${admin.email}:`, err.message);
-              });
+          if (adminUsers.length === 0) {
+            console.warn('⚠️ No admin/pharmacist users found to notify');
+          } else {
+            console.log(`📧 Sending low stock emails to ${adminUsers.length} admin(s)...`);
+            
+            // Send emails sequentially to ensure they complete
+            for (const admin of adminUsers) {
+              if (admin.email) {
+                try {
+                  await sendLowStockEmail(admin.email, admin.fullName, [product]);
+                  console.log(`✅ Low stock email sent successfully to ${admin.email}`);
+                } catch (err) {
+                  console.error(`❌ Failed to send email to ${admin.email}:`, err.message);
+                }
+              }
             }
-          });
+          }
         } catch (emailErr) {
-          console.error("Error setting up automated low stock email:", emailErr);
+          console.error("❌ Error in automated low stock email setup:", emailErr.message);
         }
+      } else if (product.quantity <= product.reorderLevel && product.lowStockAlertSent) {
+        console.log(`ℹ️ Low stock alert already sent for ${product.name}, skipping duplicate`);
       }
       
       await product.save();

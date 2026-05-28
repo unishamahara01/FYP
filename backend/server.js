@@ -80,6 +80,71 @@ app.get("/api/simple-test", (req, res) => {
   console.log("🧪 SIMPLE TEST ENDPOINT HIT");
   res.json({ message: "Simple test working", timestamp: new Date().toISOString() });
 });
+
+// Test low stock email functionality (debug endpoint)
+app.post("/api/debug/test-low-stock-email", authenticateToken, authorizeRole('Admin'), async (req, res) => {
+  try {
+    console.log("🧪 LOW STOCK EMAIL TEST TRIGGERED");
+    
+    // Verify email config
+    const emailUser = process.env.EMAIL_USER;
+    const emailPass = process.env.EMAIL_PASS;
+    const emailHost = process.env.EMAIL_HOST;
+    const emailPort = process.env.EMAIL_PORT;
+    
+    if (!emailUser || !emailPass) {
+      return res.status(400).json({
+        success: false,
+        message: "Email credentials not configured",
+        config: {
+          EMAIL_USER: emailUser ? "***configured***" : "NOT SET",
+          EMAIL_PASS: emailPass ? "***configured***" : "NOT SET",
+          EMAIL_HOST: emailHost || "smtp.gmail.com",
+          EMAIL_PORT: emailPort || 587
+        }
+      });
+    }
+    
+    // Get a sample low stock product or create one
+    const Product = require('./models/Product');
+    let testProduct = await Product.findOne({ quantity: { $lte: 50 } });
+    
+    if (!testProduct) {
+      return res.status(400).json({
+        success: false,
+        message: "No low stock products found. Create a product with quantity <= 50 to test."
+      });
+    }
+    
+    // Send test email
+    const { sendLowStockEmail } = require('./lowStockNotification');
+    const testEmail = req.user.email;
+    
+    console.log(`📧 Sending test email to ${testEmail} for product: ${testProduct.name}`);
+    
+    await sendLowStockEmail(testEmail, req.user.fullName, [testProduct]);
+    
+    res.json({
+      success: true,
+      message: "Low stock test email sent successfully",
+      product: {
+        name: testProduct.name,
+        quantity: testProduct.quantity,
+        reorderLevel: testProduct.reorderLevel
+      },
+      recipient: testEmail
+    });
+  } catch (error) {
+    console.error("❌ Low stock email test failed:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to send test email",
+      error: error.message,
+      details: error.toString()
+    });
+  }
+});
+
 app.set("trust proxy", 1);
 app.use(session({
   secret: process.env.SESSION_SECRET || "your-session-secret",
@@ -111,7 +176,7 @@ const emailTransporter = nodemailer.createTransport({
 passport.use(new GoogleStrategy({
   clientID: process.env.GOOGLE_CLIENT_ID,
   clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-  callbackURL: "/api/auth/google/callback"
+  callbackURL: `${serverUrl}/api/auth/google/callback`
 }, async (accessToken, refreshToken, profile, done) => {
   try {
     // Check if user already exists with Google ID
@@ -454,11 +519,15 @@ app.get("/api/auth/google",
 app.get("/api/auth/google/callback",
   passport.authenticate("google", { failureRedirect: "/login" }),
   (req, res) => {
-    // Generate JWT token for the user
-    const token = generateToken(req.user);
-    
-    // Redirect to frontend with token
-    res.redirect(`${frontendUrl}/auth/success?token=${token}&user=${encodeURIComponent(JSON.stringify(req.user))}`);
+    try {
+      // Generate JWT token for the user
+      const token = generateToken(req.user);
+      // Redirect to frontend with token
+      res.redirect(`${frontendUrl}/auth/success?token=${token}&user=${encodeURIComponent(JSON.stringify(req.user))}`);
+    } catch (err) {
+      console.error('Google callback handler error:', err);
+      res.status(500).send('Internal Server Error - check backend logs');
+    }
   }
 );
 
