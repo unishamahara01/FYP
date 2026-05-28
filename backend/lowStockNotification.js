@@ -52,18 +52,18 @@ async function checkLowStock() {
     let adminUsers;
     if (config.testEmail) {
       // Development mode - use specific test email
-      adminUsers = await User.find({ 
+      const user = await User.findOne({ email: config.testEmail });
+      adminUsers = [{ 
         email: config.testEmail,
-        role: { $in: ['Admin', 'Pharmacist'] }
-      });
+        fullName: user ? user.fullName : 'System Admin'
+      }];
       console.log(`🧪 Development mode: Using test email ${config.testEmail}`);
     } else {
       // Production mode - use filtered real emails
-      adminUsers = await User.find(getNotificationQuery()).limit(config.maxRecipients);
+      const rawUsers = await User.find(getNotificationQuery()).limit(config.maxRecipients);
+      // Additional filtering for valid emails
+      adminUsers = rawUsers.filter(user => isValidEmail(user.email));
     }
-    
-    // Additional filtering for valid emails
-    adminUsers = adminUsers.filter(user => isValidEmail(user.email));
     
     if (adminUsers.length === 0) {
       console.log('❌ No admin users found to send notifications to.');

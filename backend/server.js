@@ -1277,18 +1277,18 @@ app.post("/api/inventory/send-low-stock-alert", authenticateToken, authorizeRole
     let adminUsers;
     if (emailConfig.testEmail) {
       // Development mode - use specific test email
-      adminUsers = await User.find({ 
+      const user = await User.findOne({ email: emailConfig.testEmail });
+      adminUsers = [{ 
         email: emailConfig.testEmail,
-        role: { $in: ['Admin', 'Pharmacist'] }
-      });
+        fullName: user ? user.fullName : 'System Admin'
+      }];
       console.log(`🧪 Development mode: Using test email ${emailConfig.testEmail}`);
     } else {
       // Production mode - use filtered real emails
-      adminUsers = await User.find(getNotificationQuery()).limit(emailConfig.maxRecipients);
+      const rawUsers = await User.find(getNotificationQuery()).limit(emailConfig.maxRecipients);
+      // Additional filtering for valid emails
+      adminUsers = rawUsers.filter(user => isValidEmail(user.email));
     }
-    
-    // Additional filtering for valid emails
-    adminUsers = adminUsers.filter(user => isValidEmail(user.email));
     
     if (adminUsers.length === 0) {
       return res.status(400).json({

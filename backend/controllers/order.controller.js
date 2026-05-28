@@ -103,15 +103,23 @@ exports.createOrder = async (req, res) => {
         // Find Admins/Pharmacists to notify
         try {
           const { sendLowStockEmail } = require('../lowStockNotification');
-          const adminUsers = await User.find({ role: { $in: ['Admin', 'Pharmacist'] } });
+          const { config, isValidEmail } = require('../emailConfig');
           
-          if (adminUsers.length === 0) {
+          let recipients = [];
+          if (config && config.testEmail) {
+            recipients = [{ email: config.testEmail, fullName: 'System Admin' }];
+          } else {
+            const adminUsers = await User.find({ role: { $in: ['Admin', 'Pharmacist'] }, email: { $exists: true, $ne: '' } });
+            recipients = adminUsers.filter(u => isValidEmail(u.email)).map(u => ({ email: u.email, fullName: u.fullName }));
+          }
+          
+          if (recipients.length === 0) {
             console.warn('⚠️ No admin/pharmacist users found to notify');
           } else {
-            console.log(`📧 Sending low stock emails to ${adminUsers.length} admin(s)...`);
+            console.log(`📧 Sending low stock emails to ${recipients.length} admin(s)...`);
             
             // Send emails sequentially to ensure they complete
-            for (const admin of adminUsers) {
+            for (const admin of recipients) {
               if (admin.email) {
                 try {
                   await sendLowStockEmail(admin.email, admin.fullName, [product]);
